@@ -211,5 +211,21 @@ async function refresh() {
   try { render(await api(`/api/sessions/${sessionId}`)); } catch (error) { toast(error.message); }
 }
 $('copy-session-id').onclick = async () => { if (sessionId) { await navigator.clipboard.writeText(window.location.href); toast('Share link copied'); } };
+$('download').onclick = async () => {
+  if (!sessionId) return toast('Start or join an escort first');
+  try {
+    const response = await fetch(`/api/sessions/${sessionId}/report`);
+    if (!response.ok) throw new Error('Report could not be generated');
+    const blob = await response.blob();
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = `${sessionId}-incident-report.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(link.href);
+    toast('Incident report downloaded');
+  } catch (error) { toast(error.message); }
+};
 setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString(); }, 1000);
 if (sessionId) { refresh(); startTimers(); } else setState('NO SESSION');

@@ -257,7 +257,7 @@ def heartbeat(session_id: str) -> dict[str, str]:
             raise HTTPException(404, "Session not found")
         if session["status"] in ("CANCELLED", "RESOLVED", "EXPIRED"):
             raise HTTPException(409, "Session is no longer active")
-        db.execute("UPDATE sessions SET last_heartbeat = ?, last_telemetry_epoch = ? WHERE id = ?", (now_iso(), int(time.time()), session["id"]))
+        db.execute("UPDATE sessions SET last_heartbeat = ? WHERE id = ?", (now_iso(), session["id"]))
     return {"status": "heartbeat_recorded"}
 
 

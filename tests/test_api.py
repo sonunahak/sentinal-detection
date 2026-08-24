@@ -64,6 +64,24 @@ def test_stale_heartbeat_enters_distress_on_session_read():
     assert response.json()["alerts"][0]["reason"] == "Heartbeat timeout expired: signal lost"
 
 
+def test_heartbeat_does_not_keep_location_signal_alive():
+    session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
+    from app.main import connect
+
+    with connect() as db:
+        db.execute("UPDATE sessions SET last_telemetry_epoch = ? WHERE id = ?", (int(time.time()) - 16, session_id))
+    assert client.post(f"/api/sessions/{session_id}/heartbeat").status_code == 200
+    assert client.get(f"/api/sessions/{session_id}").json()["session"]["status"] == "DISTRESS"
+
+
+def test_incident_report_download_endpoint_returns_pdf():
+    session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
+    response = client.get(f"/api/sessions/{session_id}/report")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/pdf"
+    assert response.content.startswith(b"%PDF")
+
+
 def test_alert_cannot_be_acknowledged_twice():
     session_id = client.post("/api/sessions", json={"safe_pin": "3333", "duress_pin": "7777"}).json()["session"]["id"]
     client.post(f"/api/sessions/{session_id}/cancel", json={"pin": "7777"})
