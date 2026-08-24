@@ -5,8 +5,8 @@ let heartbeatTimer = null;
 let locationWatch = null;
 let seq = 0;
 let simIndex = 0;
-const waypoints = [[20.2961, 85.8245], [20.2974, 85.8261], [20.2991, 85.8275], [20.3008, 85.8294], [20.3025, 85.8312], [20.304, 85.8338]];
-const map = L.map('map', { zoomControl: false }).setView(waypoints[0], 15);
+let waypoints = [];
+const map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
 const route = L.polyline([], { color: '#e6ae3f', weight: 5 }).addTo(map);
@@ -34,8 +34,13 @@ $('close-modal').onclick = closeModal;
 
 async function api(url, options = {}) {
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
-  if (!response.ok) throw new Error((await response.json()).detail || 'Request failed');
-  return response.json();
+  const contentType = response.headers.get('content-type') || '';
+  const body = contentType.includes('application/json') ? await response.json() : await response.text();
+  if (!response.ok) {
+    const message = typeof body === 'string' ? body : body.detail || 'Request failed';
+    throw new Error(`${response.status}: ${message}`);
+  }
+  return body;
 }
 
 function setSessionUrl(id) {
@@ -76,7 +81,7 @@ async function join() {
     if (!value) throw new Error('No session ID found');
     sessionId = value;
     setSessionUrl(sessionId);
-    await refresh();
+    render(await api(`/api/sessions/${sessionId}`));
     startTimers();
     toast('Joined escort session');
   } catch (error) { sessionId = null; toast(error.message); }
@@ -117,7 +122,21 @@ async function sendSimulatedPoint() {
   const [latitude, longitude] = waypoints[simIndex++];
   await sendPoint(latitude, longitude, { accuracy: 7 + seq, speed: 1.3 + seq * 0.45 });
 }
-$('simulate').onclick = async () => { for (let index = 0; index < waypoints.length; index += 1) { await sendSimulatedPoint(); await new Promise((resolve) => setTimeout(resolve, 350)); } };
+$('simulate').onclick = async () => { try { await prepareSimulation(); for (let index = 0; index < waypoints.length; index += 1) { await sendSimulatedPoint(); await new Promise((resolve) => setTimeout(resolve, 350)); } } catch (error) { toast(`Simulation unavailable: ${error.message}`); } };
+
+function getCurrentPosition() {
+  return new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 }));
+}
+
+async function prepareSimulation() {
+  if (!window.isSecureContext || !navigator.geolocation) throw new Error('Simulation requires location permission on an HTTPS link');
+  const position = await getCurrentPosition();
+  const { latitude, longitude } = position.coords;
+  const latitudeStep = 0.0014;
+  const longitudeStep = 0.0014 / Math.max(Math.cos(latitude * Math.PI / 180), 0.2);
+  waypoints = Array.from({ length: 6 }, (_, index) => [latitude + index * latitudeStep, longitude + index * longitudeStep]);
+  simIndex = 0;
+}
 
 async function endSession(message) {
   if (!sessionId) return;
