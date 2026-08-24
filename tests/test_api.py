@@ -74,6 +74,14 @@ def test_heartbeat_does_not_keep_location_signal_alive():
     assert client.get(f"/api/sessions/{session_id}").json()["session"]["status"] == "DISTRESS"
 
 
+def test_new_session_waits_for_first_telemetry_before_timeout():
+    session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
+    with client as session_client:
+        time.sleep(0)
+        response = session_client.get(f"/api/sessions/{session_id}")
+    assert response.json()["session"]["status"] == "ACTIVE"
+
+
 def test_incident_report_download_endpoint_returns_pdf():
     session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
     response = client.get(f"/api/sessions/{session_id}/report")

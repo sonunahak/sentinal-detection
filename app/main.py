@@ -221,7 +221,7 @@ def create_session(payload: SessionCreate) -> dict[str, Any]:
     session_id = f"session-{uuid.uuid4().hex[:10]}"
     timestamp = now_iso()
     with _db_lock, connect() as db:
-        db.execute("INSERT INTO sessions(id,status,safe_pin,duress_pin,started_at,last_hash,last_telemetry_epoch) VALUES(?,?,?,?,?,?,?)", (session_id, "ACTIVE", payload.safe_pin, payload.duress_pin, timestamp, "0" * 64, int(time.time())))
+        db.execute("INSERT INTO sessions(id,status,safe_pin,duress_pin,started_at,last_hash,last_telemetry_epoch) VALUES(?,?,?,?,?,?,?)", (session_id, "ACTIVE", payload.safe_pin, payload.duress_pin, timestamp, "0" * 64, None))
         db.execute("INSERT INTO state_events(session_id,to_status,reason,created_at) VALUES(?,?,?,?)", (session_id, "ACTIVE", "Escort session started", timestamp))
     return session_payload(connect(), session_id)
 
