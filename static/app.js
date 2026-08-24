@@ -221,7 +221,30 @@ async function refresh() {
   if (!sessionId) return;
   try { render(await api(`/api/sessions/${sessionId}`)); } catch (error) { toast(error.message); }
 }
-$('copy-session-id').onclick = async () => { if (sessionId) { await navigator.clipboard.writeText(window.location.href); toast('Share link copied'); } };
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.setAttribute('readonly', '');
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.select();
+  const copied = document.execCommand('copy');
+  input.remove();
+  if (!copied) throw new Error('Clipboard access is unavailable. Copy the link from the address bar.');
+}
+$('copy-session-id').onclick = async () => {
+  if (!sessionId) return toast('Start or join an escort first');
+  try {
+    await copyText(window.location.href);
+    toast('Share link copied');
+  } catch (error) { toast(error.message); }
+};
 $('download').onclick = async () => {
   if (!sessionId) return toast('Start or join an escort first');
   try {
