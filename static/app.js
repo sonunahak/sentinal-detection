@@ -1,5 +1,6 @@
 const $ = (id) => document.getElementById(id);
 let sessionId = new URLSearchParams(window.location.search).get('session');
+let currentRole = sessionId ? 'traveler' : null;
 let timer = null;
 let heartbeatTimer = null;
 let locationWatch = null;
@@ -27,7 +28,14 @@ function setState(status) {
   $('signal-status').textContent = status === 'ACTIVE' ? 'Connected' : status === 'NO SESSION' ? 'Offline' : 'Incident active';
 }
 
-function openModal() { $('modal').classList.remove('hidden'); }
+function setRole(role) {
+  currentRole = role;
+  const isTraveler = role === 'traveler';
+  $('signal-controls').style.display = isTraveler ? '' : 'none';
+  $('observer-mode').classList.toggle('hidden', isTraveler);
+}
+
+function openModal() { setRole('traveler'); $('modal').classList.remove('hidden'); }
 function closeModal() { $('modal').classList.add('hidden'); }
 $('new-session').onclick = openModal;
 $('close-modal').onclick = closeModal;
@@ -78,6 +86,7 @@ async function join() {
   if (!entered) return;
   const guardianName = prompt('Enter your name as the guardian');
   if (!guardianName || !guardianName.trim()) return toast('Guardian name is required to join');
+  setRole('guardian');
   try {
     const value = entered.includes('session=') ? new URL(entered).searchParams.get('session') : entered.trim();
     if (!value) throw new Error('No session ID found');
@@ -152,6 +161,7 @@ $('duress').onclick = () => endSession('Duress signal sent');
 function formatTime(value) { return value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'; }
 
 function render(data) {
+  setRole(currentRole || 'traveler');
   const session = data.session;
   const points = data.telemetry;
   setState(session.status);
