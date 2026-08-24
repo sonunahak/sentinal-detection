@@ -82,6 +82,12 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
             name TEXT NOT NULL, joined_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS guardian_locations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, guardian_id INTEGER NOT NULL,
+            session_id TEXT NOT NULL, event_time TEXT NOT NULL,
+            received_at TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
+            accuracy REAL
+        );
         """)
         columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
         if "last_telemetry_epoch" not in columns:
@@ -119,6 +125,14 @@ class AckIn(BaseModel):
 
 class GuardianJoin(BaseModel):
     name: str = Field(min_length=1, max_length=80)
+
+
+class GuardianLocationIn(BaseModel):
+    guardian_id: int = Field(ge=1)
+    event_time: str
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    accuracy: float | None = Field(default=None, ge=0)
 
 
 def haversine(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
@@ -178,8 +192,9 @@ def session_payload(db: sqlite3.Connection, session_id: str) -> dict[str, Any]:
     points = db.execute("SELECT * FROM telemetry WHERE session_id = ? ORDER BY sequence", (session_id,)).fetchall()
     events = db.execute("SELECT * FROM state_events WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
     alerts = db.execute("SELECT * FROM alerts WHERE session_id = ? ORDER BY created_at DESC", (session_id,)).fetchall()
-    guardians = db.execute("SELECT name, joined_at FROM guardians WHERE session_id = ? ORDER BY joined_at", (session_id,)).fetchall()
-    return {"session": dict(session), "telemetry": [dict(point) for point in points], "events": [dict(event) for event in events], "alerts": [dict(alert) for alert in alerts], "responders": RESPONDERS, "guardians": [dict(guardian) for guardian in guardians]}
+    guardians = db.execute("SELECT id, name, joined_at FROM guardians WHERE session_id = ? ORDER BY joined_at", (session_id,)).fetchall()
+    guardian_locations = db.execute("SELECT guardian_id, event_time, received_at, latitude, longitude, accuracy FROM guardian_locations WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
+    return {"session": dict(session), "telemetry": [dict(point) for point in points], "events": [dict(event) for event in events], "alerts": [dict(alert) for alert in alerts], "responders": RESPONDERS, "guardians": [dict(guardian) for guardian in guardians], "guardian_locations": [dict(location) for location in guardian_locations]}
 
 
 def check_timeouts() -> None:
@@ -246,6 +261,21 @@ def join_session(session_id: str, payload: GuardianJoin) -> dict[str, Any]:
             raise HTTPException(409, "Session is no longer active")
         db.execute("INSERT INTO guardians(session_id, name, joined_at) VALUES(?,?,?)", (session["id"], name, now_iso()))
         return session_payload(db, session["id"])
+
+
+@app.post("/api/sessions/{session_id}/guardian-location")
+def guardian_location(session_id: str, payload: GuardianLocationIn) -> dict[str, str]:
+    with _db_lock, connect() as db:
+        session = find_session(db, session_id)
+        if not session:
+            raise HTTPException(404, "Session not found")
+        if session["status"] in ("CANCELLED", "RESOLVED", "EXPIRED"):
+            raise HTTPException(409, "Session is no longer active")
+        guardian = db.execute("SELECT id FROM guardians WHERE id = ? AND session_id = ?", (payload.guardian_id, session["id"])).fetchone()
+        if not guardian:
+            raise HTTPException(403, "Guardian is not part of this session")
+        db.execute("INSERT INTO guardian_locations(guardian_id,session_id,event_time,received_at,latitude,longitude,accuracy) VALUES(?,?,?,?,?,?,?)", (payload.guardian_id, session["id"], payload.event_time, now_iso(), payload.latitude, payload.longitude, payload.accuracy))
+    return {"status": "recorded"}
 
 
 @app.post("/api/sessions/{session_id}/heartbeat")

@@ -4,6 +4,8 @@ let currentRole = sessionId ? 'traveler' : null;
 let timer = null;
 let heartbeatTimer = null;
 let locationWatch = null;
+let guardianLocationWatch = null;
+let guardianId = null;
 let seq = 0;
 let simIndex = 0;
 let waypoints = [];
@@ -13,6 +15,7 @@ L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
 const route = L.polyline([], { color: '#e6ae3f', weight: 5 }).addTo(map);
 let markers = [];
+let guardianLayers = [];
 
 function toast(text) {
   $('toast').textContent = text;
@@ -94,9 +97,12 @@ async function join() {
     if (!value) throw new Error('No session ID found');
     sessionId = value;
     setSessionUrl(sessionId);
-    render(await api(`/api/sessions/${sessionId}/join`, { method: 'POST', body: JSON.stringify({ name: guardianName }) }));
+    const data = await api(`/api/sessions/${sessionId}/join`, { method: 'POST', body: JSON.stringify({ name: guardianName }) });
+    guardianId = data.guardians.at(-1).id;
+    render(data);
     startTimers();
     toast('Joined escort session');
+    if (confirm('Share your location to show your distance from the traveler?')) useGuardianLocation();
   } catch (error) { sessionId = null; toast(error.message); }
 }
 $('join-session').onclick = join;
@@ -136,6 +142,25 @@ function useLocation() {
   toast('Live location enabled');
 }
 $('use-location').onclick = useLocation;
+
+async function sendGuardianPoint(position) {
+  if (!sessionId || !guardianId) return;
+  try {
+    await api(`/api/sessions/${sessionId}/guardian-location`, { method: 'POST', body: JSON.stringify({ guardian_id: guardianId, event_time: iso(), latitude: position.coords.latitude, longitude: position.coords.longitude, accuracy: position.coords.accuracy ?? null }) });
+    refresh();
+  } catch (error) { toast(error.message); }
+}
+
+function useGuardianLocation() {
+  if (!sessionId || currentRole !== 'guardian') return toast('Join an escort first');
+  if (!window.isSecureContext) return toast('Location requires an HTTPS link');
+  if (!navigator.geolocation) return toast('This browser does not support location');
+  if (guardianLocationWatch !== null) navigator.geolocation.clearWatch(guardianLocationWatch);
+  guardianLocationWatch = navigator.geolocation.watchPosition(sendGuardianPoint, (error) => toast(`Location unavailable: ${error.message}`), { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 });
+  $('guardian-location').textContent = 'Location sharing on';
+  toast('Guardian location enabled');
+}
+$('guardian-location').onclick = useGuardianLocation;
 
 async function sendSimulatedPoint() {
   if (!sessionId || simIndex >= waypoints.length) return toast('Route simulation complete');
@@ -185,6 +210,8 @@ function render(data) {
   const total = points.reduce((sum, point) => sum + point.distance_m, 0);
   $('distance').textContent = total < 1000 ? `${Math.round(total)} m` : `${(total / 1000).toFixed(2)} km`;
   const last = points[points.length - 1];
+  guardianLayers.forEach((layer) => map.removeLayer(layer));
+  guardianLayers = [];
   if (last) {
     $('speed').textContent = `${(last.speed || 0).toFixed(1)} m/s`;
     $('accuracy').textContent = `${(last.accuracy || 0).toFixed(0)} m`;
@@ -195,12 +222,38 @@ function render(data) {
     markers = [L.circleMarker(coordinates[0], { radius: 7, color: '#0d8179', fillOpacity: 1 }).addTo(map).bindTooltip('Start'), L.circleMarker(coordinates.at(-1), { radius: 8, color: '#e7654f', fillOpacity: 1 }).addTo(map).bindTooltip('Last known position')];
     if (coordinates.length === 1) map.setView(coordinates[0], 15); else map.fitBounds(route.getBounds(), { padding: [35, 35] });
   }
+  const guardianPoints = data.guardian_locations || [];
+  const latestGuardianById = new Map();
+  guardianPoints.forEach((point) => latestGuardianById.set(point.guardian_id, point));
+  latestGuardianById.forEach((point) => {
+    const guardianTrail = guardianPoints.filter((location) => location.guardian_id === point.guardian_id).map((location) => [location.latitude, location.longitude]);
+    if (guardianTrail.length > 1) guardianLayers.push(L.polyline(guardianTrail, { color: '#0d8179', weight: 3, opacity: 0.38, dashArray: '2 9' }).addTo(map));
+    guardianLayers.push(L.circleMarker([point.latitude, point.longitude], { radius: 7, color: '#0d8179', fillColor: '#b9e3dc', fillOpacity: 1 }).addTo(map).bindTooltip('Guardian'));
+    if (last) {
+      const separation = haversine(last.latitude, last.longitude, point.latitude, point.longitude);
+      guardianLayers.push(L.polyline([[last.latitude, last.longitude], [point.latitude, point.longitude]], { color: '#0d8179', weight: 2, opacity: 0.75, dashArray: '5 8' }).addTo(map));
+      $('guardian-inspection').dataset.distance = formatDistance(separation);
+    }
+  });
+  if (!latestGuardianById.size || !last) delete $('guardian-inspection').dataset.distance;
+  const inspectionDistance = $('guardian-inspection').dataset.distance;
+  if (inspectionDistance) $('guardian-inspection').innerHTML += `<span class="inspection-distance">${escapeHtml(inspectionDistance)} from traveler</span>`;
   fetch(`/api/sessions/${sessionId}/verify`).then((response) => response.json()).then((verification) => { $('integrity').textContent = verification.valid ? 'VERIFIED' : 'CHECK FAILED'; $('hash-status').textContent = verification.valid ? 'verified' : 'failed'; });
   $('events').innerHTML = data.events.length ? data.events.slice().reverse().map((event) => `<div class="event"><time>${formatTime(event.created_at)}</time><span>${event.reason}</span><span class="event-state">${event.to_status}</span></div>`).join('') : '<p class="muted">No events yet.</p>';
   const guardians = data.guardians || [];
   $('guardian-inspection').innerHTML = guardians.length ? guardians.map((guardian) => `<span class="inspection-name">${escapeHtml(guardian.name)}</span> is inspecting this escort.`).join('<br>') : 'No guardian is currently inspecting this escort.';
   renderResponders(data);
 }
+
+function haversine(aLat, aLon, bLat, bLon) {
+  const radians = Math.PI / 180;
+  const latDelta = (bLat - aLat) * radians;
+  const lonDelta = (bLon - aLon) * radians;
+  const value = Math.sin(latDelta / 2) ** 2 + Math.cos(aLat * radians) * Math.cos(bLat * radians) * Math.sin(lonDelta / 2) ** 2;
+  return 6371000 * 2 * Math.asin(Math.sqrt(value));
+}
+
+function formatDistance(meters) { return meters < 1000 ? `${Math.round(meters)} m` : `${(meters / 1000).toFixed(2)} km`; }
 
 function escapeHtml(value) {
   return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);

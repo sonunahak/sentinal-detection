@@ -52,6 +52,17 @@ def test_guardian_name_is_shared_after_joining():
     assert client.get(f"/api/sessions/{session_id}").json()["guardians"][0]["name"] == "Alex Morgan"
 
 
+def test_guardian_location_is_stored_separately_from_telemetry():
+    session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
+    joined = client.post(f"/api/sessions/{session_id}/join", json={"name": "Alex"}).json()
+    guardian_id = joined["guardians"][0]["id"]
+    response = client.post(f"/api/sessions/{session_id}/guardian-location", json={"guardian_id": guardian_id, "event_time": "2026-01-01T12:00:00+00:00", "latitude": 20.3, "longitude": 85.8, "accuracy": 5})
+    assert response.status_code == 200
+    data = client.get(f"/api/sessions/{session_id}").json()
+    assert len(data["telemetry"]) == 0
+    assert data["guardian_locations"][0]["guardian_id"] == guardian_id
+
+
 def test_stale_heartbeat_enters_distress_on_session_read():
     session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
     from app.main import connect
