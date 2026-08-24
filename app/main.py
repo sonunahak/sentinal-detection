@@ -77,6 +77,10 @@ def init_db() -> None:
             id INTEGER PRIMARY KEY AUTOINCREMENT, alert_id TEXT NOT NULL,
             responder_id TEXT NOT NULL, status TEXT NOT NULL, attempted_at TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS guardians (
+            id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
+            name TEXT NOT NULL, joined_at TEXT NOT NULL
+        );
         """)
 
 
@@ -106,6 +110,10 @@ class PinIn(BaseModel):
 
 class AckIn(BaseModel):
     responder_id: str
+
+
+class GuardianJoin(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
 
 
 def haversine(a_lat: float, a_lon: float, b_lat: float, b_lon: float) -> float:
@@ -165,7 +173,8 @@ def session_payload(db: sqlite3.Connection, session_id: str) -> dict[str, Any]:
     points = db.execute("SELECT * FROM telemetry WHERE session_id = ? ORDER BY sequence", (session_id,)).fetchall()
     events = db.execute("SELECT * FROM state_events WHERE session_id = ? ORDER BY id", (session_id,)).fetchall()
     alerts = db.execute("SELECT * FROM alerts WHERE session_id = ? ORDER BY created_at DESC", (session_id,)).fetchall()
-    return {"session": dict(session), "telemetry": [dict(point) for point in points], "events": [dict(event) for event in events], "alerts": [dict(alert) for alert in alerts], "responders": RESPONDERS}
+    guardians = db.execute("SELECT name, joined_at FROM guardians WHERE session_id = ? ORDER BY joined_at", (session_id,)).fetchall()
+    return {"session": dict(session), "telemetry": [dict(point) for point in points], "events": [dict(event) for event in events], "alerts": [dict(alert) for alert in alerts], "responders": RESPONDERS, "guardians": [dict(guardian) for guardian in guardians]}
 
 
 def check_timeouts() -> None:
@@ -214,6 +223,21 @@ def get_session(session_id: str) -> dict[str, Any]:
     check_timeouts()
     with connect() as db:
         return session_payload(db, session_id)
+
+
+@app.post("/api/sessions/{session_id}/join")
+def join_session(session_id: str, payload: GuardianJoin) -> dict[str, Any]:
+    name = " ".join(payload.name.split())
+    if not name:
+        raise HTTPException(422, "Guardian name is required")
+    with _db_lock, connect() as db:
+        session = find_session(db, session_id)
+        if not session:
+            raise HTTPException(404, "Session not found")
+        if session["status"] in ("CANCELLED", "RESOLVED", "EXPIRED"):
+            raise HTTPException(409, "Session is no longer active")
+        db.execute("INSERT INTO guardians(session_id, name, joined_at) VALUES(?,?,?)", (session["id"], name, now_iso()))
+        return session_payload(db, session["id"])
 
 
 @app.post("/api/sessions/{session_id}/heartbeat")

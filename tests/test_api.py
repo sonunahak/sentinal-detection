@@ -43,6 +43,14 @@ def test_session_can_be_joined_with_ten_character_token():
     assert response.json()["session"]["id"] == session_id
 
 
+def test_guardian_name_is_shared_after_joining():
+    session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
+    response = client.post(f"/api/sessions/{session_id}/join", json={"name": "  Alex   Morgan  "})
+    assert response.status_code == 200
+    assert response.json()["guardians"][0]["name"] == "Alex Morgan"
+    assert client.get(f"/api/sessions/{session_id}").json()["guardians"][0]["name"] == "Alex Morgan"
+
+
 def test_alert_cannot_be_acknowledged_twice():
     session_id = client.post("/api/sessions", json={"safe_pin": "3333", "duress_pin": "7777"}).json()["session"]["id"]
     client.post(f"/api/sessions/{session_id}/cancel", json={"pin": "7777"})

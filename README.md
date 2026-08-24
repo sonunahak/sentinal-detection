@@ -19,8 +19,9 @@ On the computer, open http://127.0.0.1:8000. The local address is only for testi
 
 1. Open the deployed HTTPS link and click **New escort**.
 2. Click **Copy Session ID**. It copies the complete session link, including the session token. Send that one link to the responder and open it on the tracking phone.
-3. On the phone, click **Use my location** and allow precise location permission. The phone sends browser GPS updates to the shared server; the responder page refreshes the map every 2.5 seconds.
-4. Keep the tracking page visible and the phone awake for the most reliable updates. Mobile operating systems may pause browser JavaScript when a tab is backgrounded, the screen is locked, battery saving is enabled, or the browser is closed.
+3. When the responder clicks **Join escort**, they enter their guardian name. That name appears on the shared session screen as “Name is inspecting this escort.”
+4. On the phone, click **Use my location** and allow precise location permission. The phone sends browser GPS updates to the shared server; the responder page refreshes the map every 2.5 seconds.
+5. Keep the tracking page visible and the phone awake for the most reliable updates. Mobile operating systems may pause browser JavaScript when a tab is backgrounded, the screen is locked, battery saving is enabled, or the browser is closed.
 
 **Use my location** uses `watchPosition` with high accuracy and records the browser's reported latitude, longitude, speed, heading, and accuracy estimate. It cannot guarantee an exact position: GPS, Wi-Fi positioning, indoors, device settings, and permission choices affect the result. A secure HTTPS deployment is required; ordinary LAN HTTP URLs generally cannot use mobile geolocation. **Simulate route** is only test data.
 
@@ -36,6 +37,7 @@ The default timeout values are intentionally short for local demos: warning afte
 ## API highlights
 
 - `POST /api/sessions` creates an escort session.
+- `POST /api/sessions/{id}/join` registers a guardian name and returns the shared inspection list.
 - `POST /api/sessions/{id}/telemetry` accepts idempotent, sequenced telemetry.
 - `POST /api/sessions/{id}/heartbeat` refreshes expected communication.
 - `POST /api/sessions/{id}/cancel` accepts a safe or duress PIN.

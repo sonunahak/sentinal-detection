@@ -76,12 +76,14 @@ $('start-session').onclick = start;
 async function join() {
   const entered = prompt('Paste the session link or enter the session ID');
   if (!entered) return;
+  const guardianName = prompt('Enter your name as the guardian');
+  if (!guardianName || !guardianName.trim()) return toast('Guardian name is required to join');
   try {
     const value = entered.includes('session=') ? new URL(entered).searchParams.get('session') : entered.trim();
     if (!value) throw new Error('No session ID found');
     sessionId = value;
     setSessionUrl(sessionId);
-    render(await api(`/api/sessions/${sessionId}`));
+    render(await api(`/api/sessions/${sessionId}/join`, { method: 'POST', body: JSON.stringify({ name: guardianName }) }));
     startTimers();
     toast('Joined escort session');
   } catch (error) { sessionId = null; toast(error.message); }
@@ -171,7 +173,13 @@ function render(data) {
   }
   fetch(`/api/sessions/${sessionId}/verify`).then((response) => response.json()).then((verification) => { $('integrity').textContent = verification.valid ? 'VERIFIED' : 'CHECK FAILED'; $('hash-status').textContent = verification.valid ? 'verified' : 'failed'; });
   $('events').innerHTML = data.events.length ? data.events.slice().reverse().map((event) => `<div class="event"><time>${formatTime(event.created_at)}</time><span>${event.reason}</span><span class="event-state">${event.to_status}</span></div>`).join('') : '<p class="muted">No events yet.</p>';
+  const guardians = data.guardians || [];
+  $('guardian-inspection').innerHTML = guardians.length ? guardians.map((guardian) => `<span class="inspection-name">${escapeHtml(guardian.name)}</span> is inspecting this escort.`).join('<br>') : 'No guardian is currently inspecting this escort.';
   renderResponders(data);
+}
+
+function escapeHtml(value) {
+  return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
 }
 
 function renderResponders(data) {
