@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: sentineltrace
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SENTINEL_WARNING_SECONDS
+        value: "12"
+      - key: SENTINEL_GRACE_SECONDS
+        value: "18"
+      - key: SENTINEL_DB
+        value: /tmp/sentineltrace.db

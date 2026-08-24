@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SentinelTrace | Escort operations</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="/"><span class="brand-mark">ST</span><span>SentinelTrace</span></a>
+      <div class="topbar-meta"><span class="live-dot"></span><span>LOCAL PROTOTYPE</span><span id="clock">--:--:--</span></div>
+    </header>
+
+    <section class="intro">
+      <div><p class="eyebrow">Escort operations / command view</p><h1>Keep the signal visible.</h1><p class="lede">A transparent safety monitor for the moments communication matters most.</p></div>
+      <div class="control-row"><button class="button button-outline" id="join-session">Join escort</button><button class="button button-dark" id="new-session">+ New escort</button></div>
+    </section>
+
+    <section class="status-strip">
+      <div class="state-wrap"><span class="state-pulse" id="state-pulse"></span><div><span class="label">SESSION STATE</span><strong id="state">NO SESSION</strong></div></div>
+      <div><span class="label">LAST CONTACT</span><strong id="last-contact">--</strong></div>
+      <div><span class="label">POINTS LOGGED</span><strong id="point-count">0</strong></div>
+      <div><span class="label">INTEGRITY</span><strong id="integrity">--</strong></div>
+    </section>
+
+    <section class="workspace">
+      <div class="map-panel"><div id="map"></div><div class="map-overlay"><span class="map-key"><i class="key-start"></i> Start</span><span class="map-key"><i class="key-route"></i> Trail</span><span class="map-key"><i class="key-last"></i> Last known</span></div></div>
+      <aside class="side-panel">
+        <div class="panel-head"><div><p class="eyebrow">Active escort</p><div class="session-id-row"><h2 id="session-short">Waiting to begin</h2><button class="button button-outline copy-id" id="copy-session-id" title="Copy the shareable session link">Copy Session Link</button></div></div><span class="session-badge" id="session-badge">IDLE</span></div>
+        <div class="metric-grid"><div><span class="label">DISTANCE</span><strong id="distance">0 m</strong></div><div><span class="label">LATEST SPEED</span><strong id="speed">--</strong></div><div><span class="label">ACCURACY</span><strong id="accuracy">--</strong></div><div><span class="label">BEARING</span><strong id="bearing">--</strong></div></div>
+        <div class="panel-section"><div class="section-title"><span>Signal controls</span><span class="tiny-status" id="signal-status">Offline</span></div><div class="control-row"><button class="button button-accent" id="simulate">Simulate route</button><button class="button button-outline" id="use-location">Use my location</button><button class="icon-button" id="heartbeat" title="Send heartbeat now">♥</button></div><div class="control-row"><button class="button button-outline" id="duress">Trigger duress</button><button class="button button-outline" id="stop-signal">Stop signal</button></div></div>
+        <div class="panel-section"><div class="section-title"><span>Responders</span><span class="tiny-status">ACK required</span></div><div id="responders" class="responders"><p class="muted">No incident in progress.</p></div></div>
+        <div class="panel-section export-row"><button class="button button-dark full" id="download">Download incident report</button><p class="fine-print">Known telemetry only. This prototype does not prove an attack or replace emergency services.</p></div>
+      </aside>
+    </section>
+
+    <section class="lower-grid"><div class="event-panel"><div class="section-title"><span>Event timeline</span><span class="tiny-status" id="refresh-status">Live refresh</span></div><div id="events" class="events"><p class="muted">Start an escort to begin the audit trail.</p></div></div><div class="session-panel"><p class="eyebrow">Session security</p><h2>Explicitly monitored.</h2><p>Telemetry is chained with SHA-256 so edits are detectable. Heartbeats are separate from location: even a stationary device must keep checking in.</p><div class="security-line"><span class="check">✓</span><span>Hash chain <strong id="hash-status">pending</strong></span></div></div></section>
+  </main>
+  <div class="modal hidden" id="modal"><div class="modal-card"><button class="modal-close" id="close-modal">×</button><p class="eyebrow">Start a monitored walk</p><h2>New escort session</h2><label>Duration <select id="duration"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label><div class="pin-grid"><label>Safe PIN<input id="safe-pin" value="1234" inputmode="numeric"></label><label>Duress PIN<input id="duress-pin" value="9999" inputmode="numeric"></label></div><button class="button button-accent full" id="start-session">Start escort</button></div></div>
+  <div class="toast" id="toast"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="/static/app.js"></script>
+</body></html>
