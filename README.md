@@ -32,7 +32,7 @@ On the computer, open http://127.0.0.1:8000. The local address is only for testi
 3. On the tracking device, click **Use my location** or **Simulate route**. Trigger **Duress** or stop the heartbeat and wait for the warning/grace timers.
 4. Acknowledge the alert from the responder panel and download the incident PDF.
 
-The default timeout values are intentionally short for local demos: warning after 12 seconds without contact, distress after a further 18 seconds. Override them with `SENTINEL_WARNING_SECONDS` and `SENTINEL_GRACE_SECONDS`.
+The dead-man switch uses integer epoch timestamps: warning after 10 seconds without contact, then distress after a further 5 seconds. The Guardian view polls every 2 seconds and surfaces warning or distress state changes.
 
 ## API highlights
 

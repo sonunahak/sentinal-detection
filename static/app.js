@@ -7,6 +7,7 @@ let locationWatch = null;
 let seq = 0;
 let simIndex = 0;
 let waypoints = [];
+let lastObservedStatus = null;
 const map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
@@ -60,7 +61,7 @@ function setSessionUrl(id) {
 function startTimers() {
   clearInterval(timer);
   clearInterval(heartbeatTimer);
-  timer = setInterval(refresh, 2500);
+  timer = setInterval(refresh, 2000);
   heartbeatTimer = setInterval(sendHeartbeat, 5000);
 }
 
@@ -164,7 +165,12 @@ function render(data) {
   setRole(currentRole || 'traveler');
   const session = data.session;
   const points = data.telemetry;
+  const statusChanged = lastObservedStatus !== null && lastObservedStatus !== session.status;
+  lastObservedStatus = session.status;
   setState(session.status);
+  if (statusChanged && (session.status === 'WARNING' || session.status === 'DISTRESS')) {
+    toast(session.status === 'DISTRESS' ? 'ALERT: Heartbeat signal lost' : 'Warning: heartbeat signal delayed');
+  }
   $('session-short').textContent = session.id.slice(-10);
   $('point-count').textContent = points.length;
   $('last-contact').textContent = formatTime(session.last_heartbeat);

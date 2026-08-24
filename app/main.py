@@ -24,8 +24,8 @@ from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, Tabl
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = Path(os.getenv("SENTINEL_DB", ROOT / "sentineltrace.db"))
-WARNING_SECONDS = int(os.getenv("SENTINEL_WARNING_SECONDS", "12"))
-GRACE_SECONDS = int(os.getenv("SENTINEL_GRACE_SECONDS", "18"))
+HEARTBEAT_TIMEOUT_SECONDS = 10
+GRACE_PERIOD_SECONDS = 5
 
 app = FastAPI(title="SentinelTrace", version="1.0.0")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
@@ -54,7 +54,8 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY, status TEXT NOT NULL, safe_pin TEXT NOT NULL,
             duress_pin TEXT NOT NULL, started_at TEXT NOT NULL, last_heartbeat TEXT,
-            warning_at TEXT, distress_at TEXT, ended_at TEXT, last_hash TEXT NOT NULL
+            warning_at TEXT, distress_at TEXT, ended_at TEXT, last_hash TEXT NOT NULL,
+            last_telemetry_epoch INTEGER
         );
         CREATE TABLE IF NOT EXISTS telemetry (
             id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL,
@@ -82,6 +83,10 @@ def init_db() -> None:
             name TEXT NOT NULL, joined_at TEXT NOT NULL
         );
         """)
+        columns = {row["name"] for row in db.execute("PRAGMA table_info(sessions)")}
+        if "last_telemetry_epoch" not in columns:
+            db.execute("ALTER TABLE sessions ADD COLUMN last_telemetry_epoch INTEGER")
+        db.execute("UPDATE sessions SET last_telemetry_epoch = CAST(strftime('%s', last_heartbeat) AS INTEGER) WHERE last_telemetry_epoch IS NULL AND last_heartbeat IS NOT NULL")
 
 
 init_db()
@@ -179,13 +184,16 @@ def session_payload(db: sqlite3.Connection, session_id: str) -> dict[str, Any]:
 
 def check_timeouts() -> None:
     with _db_lock, connect() as db:
-        active = db.execute("SELECT * FROM sessions WHERE status IN ('ACTIVE','WARNING') AND last_heartbeat IS NOT NULL").fetchall()
-        current_time = time.time()
+        active = db.execute("SELECT * FROM sessions WHERE status IN ('ACTIVE','WARNING') AND last_telemetry_epoch IS NOT NULL").fetchall()
+        current_epoch = int(time.time())
         for session in active:
-            age = current_time - datetime.fromisoformat(session["last_heartbeat"]).timestamp()
-            if session["status"] == "ACTIVE" and age >= WARNING_SECONDS:
+            elapsed = current_epoch - session["last_telemetry_epoch"]
+            if session["status"] == "ACTIVE" and elapsed > HEARTBEAT_TIMEOUT_SECONDS + GRACE_PERIOD_SECONDS:
+                transition(db, session["id"], "ACTIVE", "DISTRESS", "Heartbeat timeout expired: signal lost")
+                make_alert(db, session["id"], "Heartbeat timeout expired: signal lost")
+            elif session["status"] == "ACTIVE" and elapsed > HEARTBEAT_TIMEOUT_SECONDS:
                 transition(db, session["id"], "ACTIVE", "WARNING", "Heartbeat timeout; grace period started")
-            elif session["status"] == "WARNING" and age >= WARNING_SECONDS + GRACE_SECONDS:
+            elif session["status"] == "WARNING" and elapsed > HEARTBEAT_TIMEOUT_SECONDS + GRACE_PERIOD_SECONDS:
                 transition(db, session["id"], "WARNING", "DISTRESS", "Heartbeat grace period expired")
                 make_alert(db, session["id"], "Unexpected telemetry loss / possible distress")
 
@@ -213,7 +221,7 @@ def create_session(payload: SessionCreate) -> dict[str, Any]:
     session_id = f"session-{uuid.uuid4().hex[:10]}"
     timestamp = now_iso()
     with _db_lock, connect() as db:
-        db.execute("INSERT INTO sessions(id,status,safe_pin,duress_pin,started_at,last_hash) VALUES(?,?,?,?,?,?)", (session_id, "ACTIVE", payload.safe_pin, payload.duress_pin, timestamp, "0" * 64))
+        db.execute("INSERT INTO sessions(id,status,safe_pin,duress_pin,started_at,last_hash,last_telemetry_epoch) VALUES(?,?,?,?,?,?,?)", (session_id, "ACTIVE", payload.safe_pin, payload.duress_pin, timestamp, "0" * 64, int(time.time())))
         db.execute("INSERT INTO state_events(session_id,to_status,reason,created_at) VALUES(?,?,?,?)", (session_id, "ACTIVE", "Escort session started", timestamp))
     return session_payload(connect(), session_id)
 
@@ -249,7 +257,7 @@ def heartbeat(session_id: str) -> dict[str, str]:
             raise HTTPException(404, "Session not found")
         if session["status"] in ("CANCELLED", "RESOLVED", "EXPIRED"):
             raise HTTPException(409, "Session is no longer active")
-        db.execute("UPDATE sessions SET last_heartbeat = ? WHERE id = ?", (now_iso(), session["id"]))
+        db.execute("UPDATE sessions SET last_heartbeat = ?, last_telemetry_epoch = ? WHERE id = ?", (now_iso(), int(time.time()), session["id"]))
     return {"status": "heartbeat_recorded"}
 
 
@@ -272,7 +280,7 @@ def telemetry(session_id: str, payload: TelemetryIn) -> dict[str, Any]:
         previous_hash = session["last_hash"]
         current_hash = hashlib.sha256((json.dumps(record, sort_keys=True, separators=(",", ":")) + previous_hash).encode()).hexdigest()
         db.execute("INSERT INTO telemetry(session_id,event_id,sequence,event_time,received_at,latitude,longitude,accuracy,speed,bearing,distance_m,previous_hash,current_hash) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)", (*record.values(), previous_hash, current_hash))
-        db.execute("UPDATE sessions SET last_hash = ?, last_heartbeat = ? WHERE id = ?", (current_hash, now_iso(), session_id))
+        db.execute("UPDATE sessions SET last_hash = ?, last_heartbeat = ?, last_telemetry_epoch = ? WHERE id = ?", (current_hash, now_iso(), int(time.time()), session_id))
     return {"status": "recorded", "hash": current_hash, "distance_m": round(distance, 2)}
 
 

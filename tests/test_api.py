@@ -1,5 +1,6 @@
 import os
 import tempfile
+import time
 
 os.environ["SENTINEL_DB"] = tempfile.NamedTemporaryFile(suffix=".db", delete=False).name
 
@@ -49,6 +50,18 @@ def test_guardian_name_is_shared_after_joining():
     assert response.status_code == 200
     assert response.json()["guardians"][0]["name"] == "Alex Morgan"
     assert client.get(f"/api/sessions/{session_id}").json()["guardians"][0]["name"] == "Alex Morgan"
+
+
+def test_stale_heartbeat_enters_distress_on_session_read():
+    session_id = client.post("/api/sessions", json={}).json()["session"]["id"]
+    from app.main import connect
+
+    with connect() as db:
+        db.execute("UPDATE sessions SET last_telemetry_epoch = ? WHERE id = ?", (int(time.time()) - 16, session_id))
+    response = client.get(f"/api/sessions/{session_id}")
+    assert response.json()["session"]["status"] == "DISTRESS"
+    assert response.json()["events"][-1]["reason"] == "Heartbeat timeout expired: signal lost"
+    assert response.json()["alerts"][0]["reason"] == "Heartbeat timeout expired: signal lost"
 
 
 def test_alert_cannot_be_acknowledged_twice():
