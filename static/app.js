@@ -69,6 +69,7 @@ async function start() {
   try {
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ duration_minutes: +$('duration').value, safe_pin: $('safe-pin').value, duress_pin: $('duress-pin').value }) });
     sessionId = data.session.id;
+    lastObservedStatus = null;
     seq = 0;
     simIndex = 0;
     setSessionUrl(sessionId);
@@ -102,7 +103,14 @@ $('join-session').onclick = join;
 
 async function sendHeartbeat() {
   if (!sessionId) return;
-  try { await api(`/api/sessions/${sessionId}/heartbeat`, { method: 'POST' }); } catch (error) { toast(error.message); }
+  try {
+    if (currentRole === 'traveler' && locationWatch !== null) {
+      const position = await getCurrentPosition();
+      await sendPoint(position.coords.latitude, position.coords.longitude, position.coords);
+    } else {
+      await api(`/api/sessions/${sessionId}/heartbeat`, { method: 'POST' });
+    }
+  } catch (error) { if (currentRole === 'traveler' && locationWatch !== null) return; toast(error.message); }
 }
 $('heartbeat').onclick = sendHeartbeat;
 
@@ -202,7 +210,7 @@ function renderResponders(data) {
   const alert = data.alerts[0];
   if (!alert) return $('responders').innerHTML = '<p class="muted">No incident in progress.</p>';
   const current = alert.current_responder;
-  $('responders').innerHTML = data.responders.map((responder, index) => { const notified = index <= current; const acknowledged = alert.acknowledged_by === responder.id; return `<div class="responder"><span><strong>${responder.name}</strong><small>${responder.role} · ${notified ? 'Notified' : 'Queued'}</small></span>${acknowledged ? '<span class="ack">ACK</span>' : (alert.status === 'ALERTING' && index === current ? `<button class="ack-button" onclick="ack('${alert.id}','${responder.id}')">Acknowledge</button>` : '')}</div>`; }).join('');
+  $('responders').innerHTML = data.responders.map((responder, index) => { const notified = index <= current; const acknowledged = alert.acknowledged_by === responder.id; const action = currentRole === 'guardian' && !acknowledged && alert.status === 'ALERTING' && index === current ? `<button class="ack-button" onclick="ack('${alert.id}','${responder.id}')">Acknowledge</button>` : acknowledged ? '<span class="ack">ACK</span>' : ''; return `<div class="responder"><span><strong>${responder.name}</strong><small>${responder.role} · ${notified ? 'Notified' : 'Queued'}</small></span>${action}</div>`; }).join('');
 }
 window.ack = async (alertId, responderId) => { try { await api(`/api/alerts/${alertId}/acknowledge`, { method: 'POST', body: JSON.stringify({ responder_id: responderId }) }); toast('Responder acknowledgement recorded'); refresh(); } catch (error) { toast(error.message); } };
 
