@@ -238,13 +238,6 @@ async function copyText(text) {
   input.remove();
   if (!copied) throw new Error('Clipboard access is unavailable. Copy the link from the address bar.');
 }
-$('copy-session-id').onclick = async () => {
-  if (!sessionId) return toast('Start or join an escort first');
-  try {
-    await copyText(window.location.href);
-    toast('Share link copied');
-  } catch (error) { toast(error.message); }
-};
 $('download').onclick = async () => {
   if (!sessionId) return toast('Start or join an escort first');
   try {
