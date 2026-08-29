@@ -23,6 +23,101 @@ function toast(text) {
 
 function iso() { return new Date().toISOString(); }
 
+function promptValue(message, defaultValue = '') {
+  if (typeof window.prompt === 'function') {
+    try {
+      return window.prompt(message, defaultValue);
+    } catch (error) {
+      // Some browsers and embedded contexts block prompt() unexpectedly.
+    }
+  }
+
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.style.position = 'fixed';
+    overlay.style.inset = '0';
+    overlay.style.background = 'rgba(15, 23, 42, 0.72)';
+    overlay.style.display = 'flex';
+    overlay.style.alignItems = 'center';
+    overlay.style.justifyContent = 'center';
+    overlay.style.zIndex = '2000';
+
+    const modal = document.createElement('div');
+    modal.style.width = 'min(92vw, 360px)';
+    modal.style.background = '#fff';
+    modal.style.borderRadius = '14px';
+    modal.style.boxShadow = '0 20px 48px rgba(15, 23, 42, 0.25)';
+    modal.style.padding = '20px';
+    modal.style.color = '#0f172a';
+    modal.style.fontFamily = 'DM Sans, sans-serif';
+
+    const title = document.createElement('div');
+    title.textContent = message;
+    title.style.marginBottom = '12px';
+    title.style.fontWeight = '700';
+
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = defaultValue;
+    input.style.width = '100%';
+    input.style.boxSizing = 'border-box';
+    input.style.padding = '10px 12px';
+    input.style.border = '1px solid #cbd5e1';
+    input.style.borderRadius = '10px';
+    input.style.fontSize = '16px';
+    input.style.marginBottom = '14px';
+
+    const actions = document.createElement('div');
+    actions.style.display = 'flex';
+    actions.style.justifyContent = 'flex-end';
+    actions.style.gap = '8px';
+
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.type = 'button';
+    cancel.style.padding = '10px 12px';
+    cancel.style.border = 'none';
+    cancel.style.borderRadius = '10px';
+    cancel.style.background = '#e2e8f0';
+    cancel.style.cursor = 'pointer';
+    cancel.onclick = () => { cleanup(); resolve(null); };
+
+    const submit = document.createElement('button');
+    submit.textContent = 'OK';
+    submit.type = 'button';
+    submit.style.padding = '10px 12px';
+    submit.style.border = 'none';
+    submit.style.borderRadius = '10px';
+    submit.style.background = '#172b4d';
+    submit.style.color = '#fff';
+    submit.style.cursor = 'pointer';
+    submit.onclick = () => { cleanup(); resolve(input.value); };
+
+    const cleanup = () => {
+      overlay.remove();
+      input.blur();
+    };
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        submit.click();
+      }
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        cancel.click();
+      }
+    });
+
+    actions.append(cancel, submit);
+    modal.append(title, input, actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+    input.focus();
+    input.select();
+  });
+}
+
 function setState(status) {
   $('state').textContent = status;
   $('session-badge').textContent = status;
@@ -85,9 +180,9 @@ async function start() {
 $('start-session').onclick = start;
 
 async function join() {
-  const entered = prompt('Paste the session link or enter the session ID');
+  const entered = await promptValue('Paste the session link or enter the session ID');
   if (!entered) return;
-  const guardianName = prompt('Enter your name as the guardian');
+  const guardianName = await promptValue('Enter your name as the guardian');
   if (!guardianName || !guardianName.trim()) return toast('Guardian name is required to join');
   setRole('guardian');
   try {
@@ -163,7 +258,7 @@ async function prepareSimulation() {
 
 async function endSession(message) {
   if (!sessionId) return;
-  const pin = prompt('Enter the PIN');
+  const pin = await promptValue('Enter the PIN');
   if (!pin) return;
   try { await api(`/api/sessions/${sessionId}/cancel`, { method: 'POST', body: JSON.stringify({ pin }) }); toast(message); refresh(); } catch (error) { toast(error.message); }
 }
