@@ -15,6 +15,7 @@ uvicorn app.main:app --reload --host 0.0.0.0
 
 On the computer, open http://127.0.0.1:8000. The local address is only for testing on that computer. For two devices anywhere on the internet, deploy the service to Render using the instructions below and use the single generated `https://...onrender.com` link on both devices.
 
+
 ### Two-device tracking demo
 
 1. Open the deployed HTTPS link and click **New escort**.

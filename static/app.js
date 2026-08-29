@@ -183,22 +183,18 @@ function render(data) {
     toast(session.status === 'DISTRESS' ? 'ALERT: Heartbeat signal lost' : 'Warning: heartbeat signal delayed');
   }
   $('session-short').textContent = session.id.slice(-10);
-  $('point-count').textContent = points.length;
   $('last-contact').textContent = formatTime(session.last_heartbeat);
   const total = points.reduce((sum, point) => sum + point.distance_m, 0);
   $('distance').textContent = total < 1000 ? `${Math.round(total)} m` : `${(total / 1000).toFixed(2)} km`;
   const last = points[points.length - 1];
   if (last) {
-    $('speed').textContent = `${(last.speed || 0).toFixed(1)} m/s`;
-    $('accuracy').textContent = `${(last.accuracy || 0).toFixed(0)} m`;
-    $('bearing').textContent = last.bearing == null ? '--' : `${last.bearing.toFixed(0)}°`;
     const coordinates = points.map((point) => [point.latitude, point.longitude]);
     route.setLatLngs(coordinates);
     markers.forEach((marker) => map.removeLayer(marker));
     markers = [L.circleMarker(coordinates[0], { radius: 7, color: '#0d8179', fillOpacity: 1 }).addTo(map).bindTooltip('Start'), L.circleMarker(coordinates.at(-1), { radius: 8, color: '#e7654f', fillOpacity: 1 }).addTo(map).bindTooltip('Last known position')];
     if (coordinates.length === 1) map.setView(coordinates[0], 15); else map.fitBounds(route.getBounds(), { padding: [35, 35] });
   }
-  fetch(`/api/sessions/${sessionId}/verify`).then((response) => response.json()).then((verification) => { $('integrity').textContent = verification.valid ? 'VERIFIED' : 'CHECK FAILED'; $('hash-status').textContent = verification.valid ? 'verified' : 'failed'; });
+  fetch(`/api/sessions/${sessionId}/verify`).then((response) => response.json()).then((verification) => { $('hash-status').textContent = verification.valid ? 'verified' : 'failed'; });
   $('events').innerHTML = data.events.length ? data.events.slice().reverse().map((event) => `<div class="event"><time>${formatTime(event.created_at)}</time><span>${event.reason}</span><span class="event-state">${event.to_status}</span></div>`).join('') : '<p class="muted">No events yet.</p>';
   const guardians = data.guardians || [];
   $('guardian-inspection').innerHTML = guardians.length ? guardians.map((guardian) => `<span class="inspection-name">${escapeHtml(guardian.name)}</span> is inspecting this escort.`).join('<br>') : 'No guardian is currently inspecting this escort.';
