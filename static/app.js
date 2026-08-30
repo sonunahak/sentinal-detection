@@ -9,11 +9,22 @@ let seq = 0;
 let simIndex = 0;
 let waypoints = [];
 let lastObservedStatus = null;
+let hasAutoCentered = false;
 const map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
 const route = L.polyline([], { color: '#e6ae3f', weight: 5 }).addTo(map);
 let markers = [];
+
+function centerRoute(coordinates) {
+  if (coordinates.length === 1) map.setView(coordinates[0], 15);
+  else map.fitBounds(route.getBounds(), { padding: [35, 35] });
+}
+
+$('recenter-route').onclick = () => {
+  const coordinates = route.getLatLngs();
+  if (coordinates.length) centerRoute(coordinates);
+};
 
 function toast(text) {
   $('toast').textContent = text;
@@ -166,6 +177,7 @@ async function start() {
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify({ duration_minutes: +$('duration').value, safe_pin: $('safe-pin').value, duress_pin: $('duress-pin').value }) });
     sessionId = data.session.id;
     lastObservedStatus = null;
+    hasAutoCentered = false;
     seq = 0;
     simIndex = 0;
     setSessionUrl(sessionId);
@@ -192,6 +204,7 @@ async function join() {
     setSessionUrl(sessionId);
     const data = await api(`/api/sessions/${sessionId}/join`, { method: 'POST', body: JSON.stringify({ name: guardianName }) });
     guardianId = data.guardians.at(-1).id;
+    hasAutoCentered = false;
     render(data);
     startTimers();
     toast('Joined escort session');
@@ -287,7 +300,10 @@ function render(data) {
     route.setLatLngs(coordinates);
     markers.forEach((marker) => map.removeLayer(marker));
     markers = [L.circleMarker(coordinates[0], { radius: 7, color: '#0d8179', fillOpacity: 1 }).addTo(map).bindTooltip('Start'), L.circleMarker(coordinates.at(-1), { radius: 8, color: '#e7654f', fillOpacity: 1 }).addTo(map).bindTooltip('Last known position')];
-    if (coordinates.length === 1) map.setView(coordinates[0], 15); else map.fitBounds(route.getBounds(), { padding: [35, 35] });
+    if (!hasAutoCentered) {
+      centerRoute(coordinates);
+      hasAutoCentered = true;
+    }
   }
   fetch(`/api/sessions/${sessionId}/verify`).then((response) => response.json()).then((verification) => { $('hash-status').textContent = verification.valid ? 'verified' : 'failed'; });
   $('events').innerHTML = data.events.length ? data.events.slice().reverse().map((event) => `<div class="event"><time>${formatTime(event.created_at)}</time><span>${event.reason}</span><span class="event-state">${event.to_status}</span></div>`).join('') : '<p class="muted">No events yet.</p>';
