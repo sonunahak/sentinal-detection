@@ -10,11 +10,19 @@ let simIndex = 0;
 let waypoints = [];
 let lastObservedStatus = null;
 let hasAutoCentered = false;
+let contextRefreshAt = 0;
+let replayData = null;
+let replayFrames = [];
+let replayFrameIndex = 0;
+let replayTimer = null;
 const map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
-const route = L.polyline([], { color: '#e6ae3f', weight: 5 }).addTo(map);
+const route = L.polyline([], { color: '#eab13f', weight: 5 }).addTo(map);
 let markers = [];
+const contextMarkers = L.layerGroup().addTo(map);
+const replayTrail = L.polyline([], { color: '#178b83', weight: 5, dashArray: '8 5' }).addTo(map);
+let replayMarker = null;
 
 function centerRoute(coordinates) {
   if (coordinates.length === 1) map.setView(coordinates[0], 15);
@@ -47,7 +55,7 @@ function promptValue(message, defaultValue = '') {
     const overlay = document.createElement('div');
     overlay.style.position = 'fixed';
     overlay.style.inset = '0';
-    overlay.style.background = 'rgba(15, 23, 42, 0.72)';
+    overlay.style.background = 'rgba(25, 50, 65, 0.72)';
     overlay.style.display = 'flex';
     overlay.style.alignItems = 'center';
     overlay.style.justifyContent = 'center';
@@ -147,6 +155,27 @@ function openModal() { setRole('traveler'); $('modal').classList.remove('hidden'
 function closeModal() { $('modal').classList.add('hidden'); }
 $('new-session').onclick = openModal;
 $('close-modal').onclick = closeModal;
+$('new-trip').onclick = () => {
+  const status = $('trip-status-label').textContent;
+  if (['PLANNED', 'ACTIVE'].includes(status)) return toast('Complete or cancel the current trip before planning another.');
+  if (status === 'No trip' && sessionId && !['CANCELLED', 'RESOLVED', 'EXPIRED', 'COMPLETED'].includes($('session-badge').textContent)) return toast('End the current escort before planning a trip.');
+  if (sessionId) {
+    clearInterval(timer);
+    clearInterval(heartbeatTimer);
+    if (locationWatch !== null && navigator.geolocation) navigator.geolocation.clearWatch(locationWatch);
+    locationWatch = null;
+    sessionId = null;
+    const url = new URL(window.location.href);
+    url.searchParams.delete('session');
+    window.history.replaceState({}, '', url);
+    setRole('traveler');
+    setState('NO SESSION');
+  }
+  $('trip-planner').classList.remove('hidden');
+  $('trip-details').classList.add('hidden');
+  $('trip-planner').scrollIntoView({ behavior: 'smooth', block: 'center' });
+  $('trip-traveler').focus({ preventScroll: true });
+};
 
 async function api(url, options = {}) {
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options });
@@ -231,6 +260,7 @@ async function sendPoint(latitude, longitude, position = {}) {
   try {
     await api(`/api/sessions/${sessionId}/telemetry`, { method: 'POST', body: JSON.stringify({ event_id: `gps-${sessionId}-${seq}-${Date.now()}`, sequence: seq, event_time: iso(), latitude, longitude, accuracy: position.accuracy ?? null, speed: position.speed ?? null, bearing: position.heading ?? null }) });
     refresh();
+    if (Date.now() - contextRefreshAt >= 60000) refreshContext();
   } catch (error) { toast(error.message); }
 }
 
@@ -279,6 +309,8 @@ $('stop-signal').onclick = () => endSession('Session ended');
 $('duress').onclick = () => endSession('Duress signal sent');
 
 function formatTime(value) { return value ? new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '--'; }
+function formatDateTime(value) { return value ? new Date(value).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }) : '--'; }
+function formatElapsed(seconds) { const minutes = Math.floor(seconds / 60); const hours = Math.floor(minutes / 60); return hours ? `${hours}h ${minutes % 60}m` : `${minutes}m ${seconds % 60}s`; }
 
 function render(data) {
   setRole(currentRole || 'traveler');
@@ -287,6 +319,7 @@ function render(data) {
   const statusChanged = lastObservedStatus !== null && lastObservedStatus !== session.status;
   lastObservedStatus = session.status;
   setState(session.status);
+  $('session-badge').textContent = session.trip_status || session.status;
   if (statusChanged && (session.status === 'WARNING' || session.status === 'DISTRESS')) {
     toast(session.status === 'DISTRESS' ? 'ALERT: Heartbeat signal lost' : 'Warning: heartbeat signal delayed');
   }
@@ -295,6 +328,7 @@ function render(data) {
   const total = points.reduce((sum, point) => sum + point.distance_m, 0);
   $('distance').textContent = total < 1000 ? `${Math.round(total)} m` : `${(total / 1000).toFixed(2)} km`;
   const last = points[points.length - 1];
+  renderTrip(session, last);
   if (last) {
     const coordinates = points.map((point) => [point.latitude, point.longitude]);
     route.setLatLngs(coordinates);
@@ -308,13 +342,168 @@ function render(data) {
   fetch(`/api/sessions/${sessionId}/verify`).then((response) => response.json()).then((verification) => { $('hash-status').textContent = verification.valid ? 'verified' : 'failed'; });
   $('events').innerHTML = data.events.length ? data.events.slice().reverse().map((event) => `<div class="event"><time>${formatTime(event.created_at)}</time><span>${event.reason}</span><span class="event-state">${event.to_status}</span></div>`).join('') : '<p class="muted">No events yet.</p>';
   const guardians = data.guardians || [];
-  $('guardian-inspection').innerHTML = guardians.length ? guardians.map((guardian) => `<span class="inspection-name">${escapeHtml(guardian.name)}</span> is inspecting this escort.`).join('<br>') : 'No guardian is currently inspecting this escort.';
+  $('guardian-inspection').innerHTML = guardians.length ? guardians.map((guardian) => `<span class="inspection-name">${escapeHtml(guardian.name)}</span> is inspecting this escort.`).join('<br>') : session.trip_guardian ? `Guardian expected: <span class="inspection-name">${escapeHtml(session.trip_guardian)}</span>.` : 'No guardian is currently inspecting this escort.';
+  renderContext(data.context_events || []);
   renderResponders(data);
 }
 
 function escapeHtml(value) {
-  return value.replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
+  return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character]);
 }
+
+function renderTrip(session, lastPoint) {
+  const isTrip = Boolean(session.trip_status);
+  $('trip-planner').classList.toggle('hidden', isTrip);
+  $('trip-details').classList.toggle('hidden', !isTrip);
+  $('trip-status-label').textContent = session.trip_status || 'No trip';
+  if (!isTrip) return;
+  const terminal = ['COMPLETED', 'CANCELLED', 'INCIDENT'].includes(session.trip_status);
+  if (terminal) {
+    clearInterval(heartbeatTimer);
+    if (locationWatch !== null && navigator.geolocation) navigator.geolocation.clearWatch(locationWatch);
+    locationWatch = null;
+  }
+  $('signal-controls').classList.toggle('hidden', currentRole !== 'traveler' || (isTrip && session.trip_status !== 'ACTIVE'));
+  $('trip-traveler-value').textContent = session.traveler_name || '--';
+  $('trip-guardian-value').textContent = session.trip_guardian || '--';
+  $('trip-start-value').textContent = session.start_location || '--';
+  $('trip-started-value').textContent = formatDateTime(session.trip_started_at);
+  $('trip-destination-value').textContent = session.destination || '--';
+  $('trip-arrival-value').textContent = formatDateTime(session.expected_arrival_at);
+  $('trip-location-value').textContent = lastPoint ? `${lastPoint.latitude.toFixed(5)}, ${lastPoint.longitude.toFixed(5)}` : session.start_location || 'Waiting for location';
+  const start = session.trip_started_at ? Date.parse(session.trip_started_at) : null;
+  const end = session.trip_ended_at ? Date.parse(session.trip_ended_at) : Date.now();
+  $('trip-elapsed').textContent = start ? formatElapsed(Math.max(0, Math.floor((end - start) / 1000))) : '--';
+  $('start-trip').classList.toggle('hidden', session.trip_status !== 'PLANNED');
+  $('complete-trip').classList.toggle('hidden', session.trip_status !== 'ACTIVE' || currentRole !== 'traveler');
+  $('cancel-trip').classList.toggle('hidden', !['PLANNED', 'ACTIVE'].includes(session.trip_status) || currentRole !== 'traveler');
+}
+
+function renderContext(events) {
+  contextMarkers.clearLayers();
+  $('context-events').innerHTML = events.length ? events.map((event) => {
+    const demoTag = event.is_demo ? '<span class="demo-tag">DEMO</span>' : '';
+    const distance = event.distance_m >= 1000 ? `${(event.distance_m / 1000).toFixed(1)} km` : `${Math.round(event.distance_m)} m`;
+    if (Number.isFinite(event.latitude) && Number.isFinite(event.longitude)) {
+      const color = event.event_type === 'EMERGENCY_FACILITY' ? '#0d8179' : '#d35b45';
+      L.circleMarker([event.latitude, event.longitude], { radius: 8, color, fillColor: '#fff', fillOpacity: 0.95, weight: 3 }).bindTooltip(`${event.event_type} · ${event.source}${event.is_demo ? ' · DEMO' : ''}`).addTo(contextMarkers);
+    }
+    return `<article class="context-event"><div><strong>${escapeHtml(event.event_type.replaceAll('_', ' '))}</strong> <span class="severity severity-${escapeHtml(event.severity.toLowerCase())}">${escapeHtml(event.severity)}</span> ${demoTag}</div><p>${escapeHtml(event.description)}</p><small>${distance} away · ${escapeHtml(event.explanation)}</small><small>Source: ${escapeHtml(event.source)} · ${formatDateTime(event.event_time)}</small></article>`;
+  }).join('') : '<p class="muted">No relevant context events recorded.</p>';
+}
+
+async function refreshContext() {
+  if (!sessionId) return toast('Start or join an escort first');
+  contextRefreshAt = Date.now();
+  try {
+    const result = await api(`/api/sessions/${sessionId}/context/refresh`, { method: 'POST' });
+    $('context-provider-note').textContent = result.demo ? `Synthetic demonstration data · ${result.provider}` : result.message || 'No context provider configured.';
+    renderContext(result.events || []);
+    if (result.message) toast(result.message);
+  } catch (error) { $('context-provider-note').textContent = 'Context provider unavailable.'; toast(error.message); }
+}
+$('refresh-context').onclick = refreshContext;
+
+$('trip-planner').addEventListener('submit', async (event) => {
+  event.preventDefault();
+  const arrival = $('trip-arrival').value;
+  if (!arrival) return toast('Expected arrival is required');
+  const payload = {
+    traveler_name: $('trip-traveler').value.trim(),
+    guardian_name: $('trip-guardian').value.trim(),
+    start_location: $('trip-start').value.trim(),
+    destination: $('trip-destination').value.trim(),
+    expected_arrival_at: new Date(arrival).toISOString(),
+  };
+  try {
+    const data = await api('/api/trips', { method: 'POST', body: JSON.stringify(payload) });
+    sessionId = data.session.id;
+    currentRole = 'traveler';
+    seq = 0;
+    hasAutoCentered = false;
+    contextRefreshAt = 0;
+    setSessionUrl(sessionId);
+    $('session-short').textContent = sessionId.slice(-10);
+    render(data);
+    startTimers();
+    await loadTripOptions();
+    toast('Trip planned. Start it when the traveler is ready.');
+  } catch (error) { toast(error.message); }
+});
+
+$('start-trip').onclick = async () => {
+  try { await api(`/api/trips/${sessionId}/start`, { method: 'POST' }); await refresh(); toast('Trip started'); } catch (error) { toast(error.message); }
+};
+$('complete-trip').onclick = async () => {
+  try { await api(`/api/trips/${sessionId}/complete`, { method: 'POST' }); await refresh(); await loadTripOptions(); toast('Trip completed'); } catch (error) { toast(error.message); }
+};
+$('cancel-trip').onclick = async () => {
+  const pin = await promptValue('Enter the safe PIN to cancel this trip');
+  if (!pin) return;
+  try { await api(`/api/trips/${sessionId}/cancel`, { method: 'POST', body: JSON.stringify({ pin }) }); await refresh(); await loadTripOptions(); toast('Trip cancelled'); } catch (error) { toast(error.message); }
+};
+
+async function loadTripOptions() {
+  try {
+    const trips = await api('/api/trips');
+    const selected = $('replay-trip').value;
+    $('replay-trip').innerHTML = '<option value="">Select a trip</option>' + trips.map((trip) => `<option value="${escapeHtml(trip.id)}">${escapeHtml(trip.traveler_name)} · ${escapeHtml(trip.destination)} · ${escapeHtml(trip.trip_status)}</option>`).join('');
+    if (trips.some((trip) => trip.id === selected)) $('replay-trip').value = selected;
+  } catch (error) { toast(error.message); }
+}
+
+async function loadReplay() {
+  const id = $('replay-trip').value;
+  if (!id) return toast('Select a trip to reconstruct');
+  try {
+    replayData = await api(`/api/trips/${id}/replay`);
+    replayFrames = [
+      ...replayData.telemetry.map((point) => ({ timestamp: point.event_time, type: 'TELEMETRY', point })),
+      ...replayData.events.map((event) => ({ ...event, type: event.type })),
+    ].sort((a, b) => Date.parse(a.timestamp) - Date.parse(b.timestamp));
+    replayFrameIndex = 0;
+    pauseReplay();
+    $('replay-progress').max = Math.max(0, replayFrames.length - 1);
+    $('replay-progress').value = 0;
+    $('replay-summary').innerHTML = `<div class="summary-grid"><div><span>TRAVELER</span><strong>${escapeHtml(replayData.summary.traveler || '--')}</strong></div><div><span>GUARDIAN</span><strong>${escapeHtml(replayData.summary.guardian || '--')}</strong></div><div><span>START</span><strong>${escapeHtml(replayData.summary.start || '--')}</strong></div><div><span>DESTINATION</span><strong>${escapeHtml(replayData.summary.destination || '--')}</strong></div><div><span>START TIME</span><strong>${formatDateTime(replayData.summary.start_time)}</strong></div><div><span>END TIME</span><strong>${formatDateTime(replayData.summary.end_time)}</strong></div><div><span>DURATION</span><strong>${replayData.summary.duration_seconds === null ? 'In progress' : formatElapsed(replayData.summary.duration_seconds)}</strong></div><div><span>TELEMETRY POINTS</span><strong>${replayData.summary.telemetry_points}</strong></div><div><span>EVENTS</span><strong>${replayData.summary.event_count}</strong></div><div><span>FINAL STATUS</span><strong>${escapeHtml(replayData.summary.final_status)}</strong></div></div>`;
+    $('replay-events').innerHTML = replayData.events.length ? replayData.events.map((event) => { const location = event.latitude === null || event.longitude === null ? '' : ` · ${Number(event.latitude).toFixed(5)}, ${Number(event.longitude).toFixed(5)}`; return `<article class="replay-event"><time>${formatDateTime(event.timestamp)}</time><strong>${escapeHtml(event.type)}</strong><span>${escapeHtml(event.details)}${escapeHtml(location)}</span></article>`; }).join('') : '<p class="muted">No stored events for this trip.</p>';
+    $('replay-event-banner').textContent = replayFrames.length ? 'Replay ready.' : 'This trip has no recorded telemetry or events.';
+    if (replayFrames.length) showReplayFrame(0);
+  } catch (error) { toast(error.message); }
+}
+$('load-replay').onclick = loadReplay;
+
+function showReplayFrame(index) {
+  if (!replayFrames.length) return;
+  replayFrameIndex = Math.max(0, Math.min(index, replayFrames.length - 1));
+  const frame = replayFrames[replayFrameIndex];
+  $('replay-progress').value = replayFrameIndex;
+  $('replay-timestamp').textContent = formatDateTime(frame.timestamp);
+  const journey = replayFrames.slice(0, replayFrameIndex + 1).filter((item) => item.type === 'TELEMETRY').map((item) => [item.point.latitude, item.point.longitude]);
+  if (journey.length) {
+    replayTrail.setLatLngs(journey);
+    if (replayMarker) map.removeLayer(replayMarker);
+    replayMarker = L.circleMarker(journey[journey.length - 1], { radius: 9, color: '#15222d', fillColor: '#54c6bd', fillOpacity: 1, weight: 3 }).addTo(map).bindTooltip('Replay position');
+    if (replayFrameIndex === 0) map.setView(journey[0], 15);
+  }
+  if (frame.type === 'TELEMETRY') $('replay-event-banner').textContent = `Recorded movement · ${formatTime(frame.timestamp)}`;
+  else $('replay-event-banner').textContent = `${formatTime(frame.timestamp)} · ${frame.type} · ${frame.details}`;
+}
+
+function pauseReplay() { clearInterval(replayTimer); replayTimer = null; }
+$('replay-play').onclick = () => {
+  if (!replayFrames.length) return;
+  if (replayFrameIndex >= replayFrames.length - 1) showReplayFrame(0);
+  pauseReplay();
+  replayTimer = setInterval(() => {
+    if (replayFrameIndex >= replayFrames.length - 1) return pauseReplay();
+    showReplayFrame(replayFrameIndex + 1);
+  }, 1000 / Number($('replay-speed').value));
+};
+$('replay-pause').onclick = pauseReplay;
+$('replay-restart').onclick = () => { pauseReplay(); showReplayFrame(0); };
+$('replay-speed').onchange = () => { if (replayTimer) { $('replay-play').click(); } };
+$('replay-progress').oninput = () => { pauseReplay(); showReplayFrame(Number($('replay-progress').value)); };
 
 function renderResponders(data) {
   const alert = data.alerts[0];
@@ -363,3 +552,7 @@ $('download').onclick = async () => {
 };
 setInterval(() => { $('clock').textContent = new Date().toLocaleTimeString(); }, 1000);
 if (sessionId) { refresh(); startTimers(); } else setState('NO SESSION');
+const defaultArrival = new Date(Date.now() + 60 * 60 * 1000);
+defaultArrival.setMinutes(defaultArrival.getMinutes() - defaultArrival.getTimezoneOffset());
+$('trip-arrival').value = defaultArrival.toISOString().slice(0, 16);
+loadTripOptions();

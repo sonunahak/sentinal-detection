@@ -18,7 +18,7 @@
 
     <section class="intro">
       <div><p class="eyebrow">Escort operations / command view</p><h1>Keep the signal visible.</h1><p class="lede">A transparent safety monitor for the moments communication matters most.</p></div>
-      <div class="control-row"><button class="button button-outline" id="join-session">Join escort</button><button class="button button-dark" id="new-session">+ New escort</button></div>
+      <div class="control-row"><button class="button button-outline" id="join-session">Join escort</button><button class="button button-outline" id="new-trip">Plan trip</button><button class="button button-dark" id="new-session">+ New escort</button></div>
     </section>
 
     <section class="status-strip">
@@ -32,14 +32,29 @@
         <div class="panel-head"><div><p class="eyebrow">Active escort</p><div class="session-id-row"><h2 id="session-short">Waiting to begin</h2></div></div><span class="session-badge" id="session-badge">IDLE</span></div>
         <div class="inspection-status"><span class="inspection-indicator"></span><div><span class="label">GUARDIAN INSPECTION</span><strong id="guardian-inspection">No guardian is currently inspecting this escort.</strong></div></div>
         <div class="metric-grid"><div><span class="label">DISTANCE</span><strong id="distance">0 m</strong></div></div>
+        <div class="panel-section" id="trip-section"><div class="section-title"><span>Trip management</span><span class="tiny-status" id="trip-status-label">No trip</span></div>
+          <form id="trip-planner" class="trip-form">
+            <label>Traveler<input id="trip-traveler" maxlength="80" required></label>
+            <label>Guardian<input id="trip-guardian" maxlength="80" required></label>
+            <label>Start location<input id="trip-start" maxlength="200" required></label>
+            <label>Destination<input id="trip-destination" maxlength="200" required></label>
+            <label>Expected arrival<input id="trip-arrival" type="datetime-local" required></label>
+            <button class="button button-accent full" type="submit">Create planned trip</button>
+          </form>
+          <div id="trip-details" class="trip-details hidden"><dl><dt>Traveler</dt><dd id="trip-traveler-value">--</dd><dt>Guardian</dt><dd id="trip-guardian-value">--</dd><dt>Start</dt><dd id="trip-start-value">--</dd><dt>Trip started</dt><dd id="trip-started-value">--</dd><dt>Destination</dt><dd id="trip-destination-value">--</dd><dt>Expected arrival</dt><dd id="trip-arrival-value">--</dd><dt>Elapsed</dt><dd id="trip-elapsed">--</dd><dt>Current location</dt><dd id="trip-location-value">Waiting for location</dd></dl>
+            <div class="control-row trip-actions"><button class="button button-accent" id="start-trip" type="button">Start trip</button><button class="button button-accent" id="complete-trip" type="button">Complete trip</button><button class="button button-outline" id="cancel-trip" type="button">Cancel trip</button></div>
+          </div>
+        </div>
         <div class="panel-section" id="signal-controls"><div class="section-title"><span>Signal controls</span><span class="tiny-status" id="signal-status">Offline</span></div><div class="control-row"><button class="button button-accent" id="simulate">Simulate route</button><button class="button button-outline" id="use-location">Use my location</button><button class="icon-button" id="heartbeat" title="Send heartbeat now">♥</button></div><div class="control-row"><button class="button button-outline" id="duress">Trigger duress</button><button class="button button-outline" id="stop-signal">Stop signal</button></div></div>
         <div class="observer-mode hidden" id="observer-mode"><span class="observer-icon">&#x1f6e1;</span><div><strong>Observer Mode</strong><span>Live telemetry monitoring active</span></div></div>
+        <div class="panel-section"><div class="section-title"><span>Nearby context</span><button class="text-button" id="refresh-context" type="button">Refresh</button></div><p id="context-provider-note" class="fine-print">No context data evaluated yet.</p><div id="context-events" class="context-events"><p class="muted">Waiting for a traveler location.</p></div></div>
         <div class="panel-section"><div class="section-title"><span>Responders</span><span class="tiny-status">ACK required</span></div><div id="responders" class="responders"><p class="muted">No incident in progress.</p></div></div>
         <div class="panel-section export-row"><button class="button button-dark full" id="download">Download incident report</button><p class="fine-print">Known telemetry only. This prototype does not prove an attack or replace emergency services.</p></div>
       </aside>
     </section>
 
     <section class="lower-grid"><div class="event-panel"><div class="section-title"><span>Event timeline</span><span class="tiny-status" id="refresh-status">Live refresh</span></div><div id="events" class="events"><p class="muted">Start an escort to begin the audit trail.</p></div></div><div class="session-panel"><p class="eyebrow">Session security</p><h2>Explicitly monitored.</h2><p>Telemetry is chained with SHA-256 so edits are detectable. Heartbeats are separate from location: even a stationary device must keep checking in.</p><div class="security-line"><span class="check">✓</span><span>Hash chain <strong id="hash-status">pending</strong></span></div></div></section>
+    <section class="replay-panel"><div class="section-title"><span>Journey replay &amp; incident reconstruction</span><span class="tiny-status">Stored trip data</span></div><div class="replay-toolbar"><label>Previous trip<select id="replay-trip"><option value="">Select a trip</option></select></label><button class="button button-outline" id="load-replay" type="button">Load reconstruction</button></div><div id="replay-summary" class="replay-summary"><p class="muted">Select a trip to inspect its recorded journey.</p></div><div class="replay-controls"><button class="button button-outline" id="replay-play" type="button" title="Play replay">Play</button><button class="button button-outline" id="replay-pause" type="button" title="Pause replay">Pause</button><button class="button button-outline" id="replay-restart" type="button" title="Restart replay">Restart</button><label class="speed-control">Speed<select id="replay-speed"><option value="1">1x</option><option value="2">2x</option><option value="5">5x</option></select></label><time id="replay-timestamp">--</time></div><input id="replay-progress" class="replay-progress" type="range" min="0" max="0" value="0" aria-label="Replay timeline"><div id="replay-event-banner" class="replay-event-banner" aria-live="polite">No replay event selected.</div><div class="reconstruction"><h3>Event timeline</h3><div id="replay-events" class="replay-events"><p class="muted">No reconstruction loaded.</p></div></div></section>
   </main>
   <div class="modal hidden" id="modal"><div class="modal-card"><button class="modal-close" id="close-modal">×</button><p class="eyebrow">Start a monitored walk</p><h2>New escort session</h2><label>Duration <select id="duration"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label><div class="pin-grid"><label>Safe PIN<input id="safe-pin" value="1234" inputmode="numeric"></label><label>Duress PIN<input id="duress-pin" value="9999" inputmode="numeric"></label></div><button class="button button-accent full" id="start-session">Start escort</button></div></div>
   <div class="toast" id="toast"></div>

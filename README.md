@@ -15,6 +15,8 @@ uvicorn app.main:app --reload --host 0.0.0.0
 
 On the computer, open http://127.0.0.1:8000. The local address is only for testing on that computer. For two devices anywhere on the internet, deploy the service to Render using the instructions below and use the single generated `https://...onrender.com` link on both devices.
 
+To demonstrate the clearly labeled synthetic nearby-context provider locally, set `$env:SENTINEL_CONTEXT_PROVIDER = "demo"` in PowerShell before starting Uvicorn. The default is `none`; no real external weather, transport, or incident feeds are configured.
+
 
 ### Two-device tracking demo
 
@@ -41,13 +43,16 @@ The dead-man switch uses integer epoch timestamps: warning after 10 seconds with
 - `POST /api/sessions/{id}/join` registers a guardian name and returns the shared inspection list.
 - `POST /api/sessions/{id}/guardian-location` records a joined guardian position separately from traveler telemetry.
 - `POST /api/sessions/{id}/telemetry` accepts idempotent, sequenced telemetry.
+- `POST /api/trips` creates a planned trip on the existing session record; `POST /api/trips/{id}/start`, `/complete`, and `/cancel` manage its lifecycle.
+- `POST /api/sessions/{id}/context/refresh` evaluates nearby context using the configured provider; `GET /api/sessions/{id}/context` returns saved results.
+- `GET /api/trips` lists trips; `GET /api/trips/{id}/replay` returns chronologically ordered telemetry and stored events for replay/reconstruction.
 - `POST /api/sessions/{id}/heartbeat` refreshes expected communication.
 - `POST /api/sessions/{id}/cancel` accepts a safe or duress PIN.
 - `POST /api/alerts/{id}/acknowledge` records responder acknowledgement.
 - `GET /api/sessions/{id}/report` returns a generated PDF.
 - `GET /api/sessions/{id}/verify` verifies the telemetry hash chain.
 
-Data is stored in `sentineltrace.db`. Email delivery is represented by an auditable outbox in this local prototype; SMTP can be connected at the notification boundary later.
+Data is stored in `sentineltrace.db`. Existing databases are extended additively at startup with trip fields and trip/context event tables; the existing telemetry hash chain is unchanged. Context results are empty unless a provider is configured. The included `demo` provider produces synthetic samples labeled `MOCK_DEMO` and must not be treated as real safety information. Email delivery is represented by an auditable outbox in this local prototype; SMTP can be connected at the notification boundary later.
 
 ## Deploy to Render for a phone demo
 
@@ -58,3 +63,5 @@ This project is a FastAPI application, not a Streamlit application. The included
 3. Open the generated `https://` URL on the computer, create an escort, and share the resulting session link with the phone and responder.
 
 The HTTPS URL should allow browser geolocation on supported mobile browsers without LAN or localhost restrictions. The free service uses `/tmp/sentineltrace.db`, so session data can disappear when the service restarts or is redeployed. Free instances can also sleep. Use this deployment for demonstrations with test data, not real emergency monitoring. For a real service, use a managed persistent database such as Render PostgreSQL, authentication and private session links, monitoring, a real notification provider, and a native/background-capable mobile client rather than relying only on a browser tab.
+
+For a demo deployment, set `SENTINEL_CONTEXT_PROVIDER=demo` in the Render service environment to show explicitly synthetic nearby-context samples. Leave it unset or set it to `none` when no context provider should run.
