@@ -7,17 +7,45 @@ let locationWatch = null;
 let seq = 0;
 let hasAutoCentered = false;
 
-const map = L.map('map', { zoomControl: false }).setView([0, 0], 2);
+// Destination & Corridor State
+let plannedDestination = null; // { lat, lng, name }
+let plannedCorridorPoints = null; // [[lat, lng], ...]
+let isPickingDestination = false;
+
+// Motion Sensor & Panic State
+let lastAcceleration = { x: 0, y: 0, z: 0 };
+let shakeCount = 0;
+let lastShakeTime = 0;
+let panicCountdownTimer = null;
+let panicRemainingSeconds = 5;
+
+// Leaflet Map Initialization
+const map = L.map('map', { zoomControl: false }).setView([20.2961, 85.8245], 14);
 L.control.zoom({ position: 'bottomright' }).addTo(map);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OpenStreetMap contributors' }).addTo(map);
-const route = L.polyline([], { color: '#eab13f', weight: 5 }).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© OpenStreetMap contributors',
+}).addTo(map);
+
+// Map Layers
+const route = L.polyline([], { color: '#e6ae3f', weight: 5 }).addTo(map);
+let corridorBufferLayer = L.polyline([], { color: '#3b82f6', weight: 26, opacity: 0.16 }).addTo(map);
+let corridorCenterLayer = L.polyline([], { color: '#2563eb', weight: 3, dashArray: '6, 8', opacity: 0.85 }).addTo(map);
 let markers = [];
+let destMarker = null;
 
 function centerRoute(coordinates) {
   if (!coordinates.length) return;
   if (coordinates.length === 1) map.setView(coordinates[0], 15);
   else map.fitBounds(route.getBounds(), { padding: [35, 35] });
 }
+
+$('recenter-route').onclick = () => {
+  const coords = route.getLatLngs();
+  if (coords.length) centerRoute(coords);
+  else if (plannedCorridorPoints && plannedCorridorPoints.length) {
+    map.fitBounds(L.polyline(plannedCorridorPoints).getBounds(), { padding: [35, 35] });
+  }
+};
 
 function toast(message) {
   const toastEl = $('toast');
@@ -90,9 +118,7 @@ function promptValue(message, defaultValue = '') {
   if (typeof window.prompt === 'function') {
     try {
       return window.prompt(message, defaultValue);
-    } catch (error) {
-      // blocked by browser policy
-    }
+    } catch (e) {}
   }
 
   return new Promise((resolve) => {
@@ -165,13 +191,87 @@ function promptValue(message, defaultValue = '') {
   });
 }
 
+// -------------------------------------------------------------
+// Destination Picking & Corridor Generation
+// -------------------------------------------------------------
+$('pick-dest-map').onclick = () => {
+  closeModal();
+  isPickingDestination = true;
+  toast('Tap any location on the map to set your destination');
+  map.getContainer().style.cursor = 'crosshair';
+
+  map.once('click', async (e) => {
+    isPickingDestination = false;
+    map.getContainer().style.cursor = '';
+    const destLat = e.latlng.lat;
+    const destLng = e.latlng.lng;
+
+    // Determine starting anchor point
+    let startLat = 20.2961, startLng = 85.8245;
+    if (navigator.geolocation && window.isSecureContext) {
+      try {
+        const pos = await getCurrentPosition();
+        startLat = pos.coords.latitude;
+        startLng = pos.coords.longitude;
+      } catch (err) {}
+    }
+
+    // Generate corridor segments between start and destination
+    plannedCorridorPoints = [
+      [startLat, startLng],
+      [startLat + (destLat - startLat) * 0.35, startLng + (destLng - startLng) * 0.25],
+      [startLat + (destLat - startLat) * 0.70, startLng + (destLng - startLng) * 0.75],
+      [destLat, destLng],
+    ];
+
+    plannedDestination = { lat: destLat, lng: destLng, name: $('destination-name').value || 'Selected Destination' };
+
+    // Update map preview
+    drawCorridor(plannedCorridorPoints);
+    if (destMarker) map.removeLayer(destMarker);
+    destMarker = L.circleMarker([destLat, destLng], { radius: 9, color: '#8b5cf6', fillOpacity: 0.9 })
+      .addTo(map)
+      .bindTooltip(`🏁 ${plannedDestination.name}`, { permanent: true })
+      .openTooltip();
+
+    map.fitBounds(L.polyline(plannedCorridorPoints).getBounds(), { padding: [40, 40] });
+
+    if (!$('destination-name').value) {
+      $('destination-name').value = `Dest (${destLat.toFixed(4)}, ${destLng.toFixed(4)})`;
+    }
+    openModal();
+    toast('Destination corridor designated!');
+  });
+};
+
+function drawCorridor(points) {
+  if (!points || points.length < 2) {
+    corridorBufferLayer.setLatLngs([]);
+    corridorCenterLayer.setLatLngs([]);
+    return;
+  }
+  corridorBufferLayer.setLatLngs(points);
+  corridorCenterLayer.setLatLngs(points);
+}
+
+// -------------------------------------------------------------
+// Start & Join Escort Sessions
+// -------------------------------------------------------------
 async function start() {
   try {
     const payload = {
       duration_minutes: Number($('duration').value),
       safe_pin: $('safe-pin').value,
       duress_pin: $('duress-pin').value,
+      travel_mode: $('travel-mode').value,
+      destination_name: $('destination-name').value.trim() || null,
+      destination_lat: plannedDestination ? plannedDestination.lat : null,
+      destination_lon: plannedDestination ? plannedDestination.lng : null,
+      corridor_tolerance_m: Number($('corridor-tol').value),
+      planned_corridor: plannedCorridorPoints,
+      telegram_chat_id: $('telegram-chat-id').value.trim() || null,
     };
+
     const data = await api('/api/sessions', { method: 'POST', body: JSON.stringify(payload) });
     sessionId = data.session.id;
     hasAutoCentered = false;
@@ -180,8 +280,9 @@ async function start() {
     closeModal();
     setState('ACTIVE');
     $('session-short').textContent = sessionId.slice(-10);
-    toast('Escort started. Share this page link with the responder.');
-    refresh();
+    toast('Escort started. Safe corridor & threat radar active.');
+    armMotionGuard();
+    render(data);
     startTimers();
   } catch (error) {
     toast(error.message);
@@ -205,7 +306,7 @@ async function join() {
     setRole('guardian');
     render(data);
     startTimers();
-    toast('Joined escort session');
+    toast('Joined escort session as Observer Guardian');
   } catch (error) {
     sessionId = null;
     toast(error.message);
@@ -213,6 +314,137 @@ async function join() {
 }
 $('join-session').onclick = join;
 
+// -------------------------------------------------------------
+// Soft Warning / False Alarm Check-in
+// -------------------------------------------------------------
+$('confirm-check-in').onclick = async () => {
+  if (!sessionId) return;
+  try {
+    await api(`/api/sessions/${sessionId}/check-in`, {
+      method: 'POST',
+      body: JSON.stringify({ acknowledged: true, reason: 'Intentional detour confirmed by traveler' }),
+    });
+    $('check-in-banner').classList.add('hidden');
+    toast('Detour acknowledged as safe. False alarm cleared.');
+    refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+};
+
+// -------------------------------------------------------------
+// Mobile Device Motion / Shake & Fall Sensor Guard
+// -------------------------------------------------------------
+function armMotionGuard() {
+  if (typeof window.DeviceMotionEvent !== 'undefined') {
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      DeviceMotionEvent.requestPermission()
+        .then((state) => {
+          if (state === 'granted') window.addEventListener('devicemotion', handleMotion);
+        })
+        .catch(() => {});
+    } else {
+      window.addEventListener('devicemotion', handleMotion);
+    }
+  }
+}
+
+function handleMotion(event) {
+  if (!sessionId || currentRole !== 'traveler') return;
+  const accel = event.accelerationIncludingGravity || event.acceleration;
+  if (!accel || accel.x === null) return;
+
+  const deltaX = Math.abs(accel.x - lastAcceleration.x);
+  const deltaY = Math.abs(accel.y - lastAcceleration.y);
+  const deltaZ = Math.abs(accel.z - lastAcceleration.z);
+  const totalDelta = deltaX + deltaY + deltaZ;
+
+  lastAcceleration = { x: accel.x, y: accel.y, z: accel.z };
+
+  const now = Date.now();
+  if (totalDelta > 22.0) {
+    if (now - lastShakeTime < 1400) {
+      shakeCount += 1;
+      if (shakeCount >= 3) {
+        shakeCount = 0;
+        triggerPanicCountdown('SHAKE_PANIC');
+      }
+    } else {
+      shakeCount = 1;
+    }
+    lastShakeTime = now;
+  }
+}
+
+function triggerPanicCountdown(triggerType) {
+  if (panicCountdownTimer) return; // Already active
+
+  if (navigator.vibrate) {
+    navigator.vibrate([200, 100, 200, 100, 400]);
+  }
+
+  panicRemainingSeconds = 5;
+  $('panic-counter-num').textContent = panicRemainingSeconds;
+  $('panic-overlay').classList.remove('hidden');
+
+  panicCountdownTimer = setInterval(async () => {
+    panicRemainingSeconds -= 1;
+    $('panic-counter-num').textContent = panicRemainingSeconds;
+
+    if (panicRemainingSeconds <= 0) {
+      clearInterval(panicCountdownTimer);
+      panicCountdownTimer = null;
+      $('panic-overlay').classList.add('hidden');
+
+      // Dispatch emergency panic distress to server
+      try {
+        let lat = null, lon = null;
+        try {
+          const pos = await getCurrentPosition();
+          lat = pos.coords.latitude;
+          lon = pos.coords.longitude;
+        } catch (e) {}
+
+        await api(`/api/sessions/${sessionId}/panic`, {
+          method: 'POST',
+          body: JSON.stringify({ trigger_type: triggerType, latitude: lat, longitude: lon }),
+        });
+        toast('🚨 EMERGENCY DISTRESS BROADCASTED');
+        refresh();
+      } catch (err) {
+        toast(err.message);
+      }
+    }
+  }, 1000);
+}
+
+$('cancel-panic-btn').onclick = () => {
+  if (panicCountdownTimer) {
+    clearInterval(panicCountdownTimer);
+    panicCountdownTimer = null;
+  }
+  $('panic-overlay').classList.add('hidden');
+  toast('Panic gesture cancelled (False Alarm dismissed)');
+};
+
+// Viva / Presentation Simulators
+$('simulate-shake').onclick = () => {
+  if (!sessionId) return toast('Start an escort session first');
+  triggerPanicCountdown('SHAKE_PANIC');
+};
+
+$('simulate-detour').onclick = async () => {
+  if (!sessionId) return toast('Start an escort session first');
+  // Send point 350 meters off corridor
+  const offLat = (plannedDestination ? plannedDestination.lat : 20.2961) + 0.0035;
+  const offLng = (plannedDestination ? plannedDestination.lng : 85.8245) + 0.0035;
+  toast('Sending detour point (350m off corridor)...');
+  await sendPoint(offLat, offLng, { speed: 1.3, accuracy: 6 });
+};
+
+// -------------------------------------------------------------
+// Telemetry & GPS Tracking
+// -------------------------------------------------------------
 async function getCurrentPosition() {
   return new Promise((resolve, reject) => {
     navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -231,20 +463,21 @@ function trackLocation() {
     (error) => toast(`Location unavailable: ${error.message}`),
     { enableHighAccuracy: true, maximumAge: 5000, timeout: 15000 },
   );
-  toast('Live location enabled');
+  toast('Live GPS tracking enabled');
 }
 
 $('use-location').onclick = () => {
   if (!sessionId) return toast('Start or join an escort first');
   if (!window.isSecureContext) return toast('Location requires an HTTPS link');
   trackLocation();
+  armMotionGuard();
 };
 
-async function sendPoint(latitude, longitude, coords = {}) {
+async function sendPoint(latitude, longitude, coords = {}, triggerType = 'NORMAL') {
   if (!sessionId) return;
   seq += 1;
   try {
-    await api(`/api/sessions/${sessionId}/telemetry`, {
+    const res = await api(`/api/sessions/${sessionId}/telemetry`, {
       method: 'POST',
       body: JSON.stringify({
         event_id: `gps-${sessionId}-${seq}-${Date.now()}`,
@@ -255,8 +488,13 @@ async function sendPoint(latitude, longitude, coords = {}) {
         accuracy: coords.accuracy ?? null,
         speed: coords.speed ?? null,
         bearing: coords.heading ?? null,
+        trigger_type: triggerType,
       }),
     });
+
+    if (res.anomaly_flags && res.anomaly_flags.length) {
+      toast(`Radar: ${res.anomaly_flags.join(', ')}`);
+    }
     refresh();
   } catch (error) {
     toast(error.message);
@@ -271,9 +509,7 @@ async function sendHeartbeat() {
         const position = await getCurrentPosition();
         await sendPoint(position.coords.latitude, position.coords.longitude, position.coords);
         return;
-      } catch (error) {
-        // fall through to heartbeat-only ping if location is unavailable
-      }
+      } catch (error) {}
     }
     await api(`/api/sessions/${sessionId}/heartbeat`, { method: 'POST' });
     refresh();
@@ -286,14 +522,19 @@ $('heartbeat').onclick = sendHeartbeat;
 $('simulate').onclick = async () => {
   if (!sessionId) return toast('Start an escort before simulating route');
   try {
-    const startLat = 20.2961;
-    const startLng = 85.8245;
-    for (let step = 0; step < 6; step += 1) {
-      const latitude = startLat + step * 0.0008;
-      const longitude = startLng + step * 0.0012;
-      await sendPoint(latitude, longitude, { accuracy: 8, speed: 1.4 });
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    const corridor = plannedCorridorPoints || [
+      [20.2961, 85.8245],
+      [20.2980, 85.8270],
+      [20.3000, 85.8295],
+      [20.3020, 85.8320],
+    ];
+
+    for (let step = 0; step < corridor.length; step += 1) {
+      const [latitude, longitude] = corridor[step];
+      await sendPoint(latitude, longitude, { accuracy: 6, speed: 1.4 });
+      await new Promise((resolve) => setTimeout(resolve, 350));
     }
+    toast('On-path simulation complete');
   } catch (error) {
     toast(error.message);
   }
@@ -301,7 +542,7 @@ $('simulate').onclick = async () => {
 
 async function stopSession(actionText) {
   if (!sessionId) return;
-  const pin = await promptValue('Enter the safe PIN');
+  const pin = await promptValue('Enter PIN');
   if (!pin) return;
   try {
     await api(`/api/sessions/${sessionId}/cancel`, { method: 'POST', body: JSON.stringify({ pin }) });
@@ -314,6 +555,9 @@ async function stopSession(actionText) {
 $('stop-signal').onclick = () => stopSession('Stop signal sent');
 $('duress').onclick = () => stopSession('Duress signal triggered');
 
+// -------------------------------------------------------------
+// UI Rendering & HUD Updates
+// -------------------------------------------------------------
 function render(data) {
   const session = data.session || {};
   const points = data.telemetry || [];
@@ -324,6 +568,75 @@ function render(data) {
   setState(session.status || 'NO SESSION');
   $('session-short').textContent = session.id ? session.id.slice(-10) : 'Waiting to begin';
   $('last-contact').textContent = formatTime(session.last_heartbeat);
+  $('mode-display').textContent = session.travel_mode || 'WALKING';
+
+  // 1. Sentinel Risk Meter & Threat Radar
+  const riskScore = Number(session.current_risk_score || 0);
+  const riskBar = $('risk-bar-fill');
+  const riskPill = $('risk-pill');
+  const hudLevel = $('hud-level');
+
+  riskBar.style.width = `${Math.min(100, Math.max(0, riskScore))}%`;
+
+  if (riskScore >= 70) {
+    riskPill.className = 'risk-badge risk-critical';
+    riskPill.textContent = `${riskScore}% CRITICAL`;
+    riskBar.style.background = '#e7654f';
+    hudLevel.textContent = 'CRITICAL ALERT';
+    hudLevel.style.background = '#fde2dc';
+    hudLevel.style.color = '#b82d1b';
+  } else if (riskScore >= 35) {
+    riskPill.className = 'risk-badge risk-elevated';
+    riskPill.textContent = `${riskScore}% ELEVATED`;
+    riskBar.style.background = '#e6ae3f';
+    hudLevel.textContent = 'ELEVATED RISK';
+    hudLevel.style.background = '#fdf3d8';
+    hudLevel.style.color = '#9c6c10';
+  } else {
+    riskPill.className = 'risk-badge risk-normal';
+    riskPill.textContent = `${riskScore}% SAFE`;
+    riskBar.style.background = '#0d8179';
+    hudLevel.textContent = 'NORMAL INVARIANTS';
+    hudLevel.style.background = '#edf8f6';
+    hudLevel.style.color = '#0d8179';
+  }
+
+  // 2. HUD Pills
+  const lastPoint = points.length ? points[points.length - 1] : null;
+  const deviationM = lastPoint ? Number(lastPoint.deviation_m || 0) : 0;
+  $('deviation-stat').textContent = `${Math.round(deviationM)} m`;
+
+  if (deviationM > (session.corridor_tolerance_m || 100)) {
+    $('pill-corridor').textContent = `🛰️ Corridor: Off by ${Math.round(deviationM)}m`;
+    $('pill-corridor').style.borderColor = '#e6ae3f';
+  } else {
+    $('pill-corridor').textContent = `🛰️ Corridor: In Bounds (${Math.round(deviationM)}m)`;
+    $('pill-corridor').style.borderColor = '#e2e8f0';
+  }
+
+  const speedKmh = lastPoint && lastPoint.speed ? (lastPoint.speed * 3.6).toFixed(1) : '0.0';
+  $('pill-speed').textContent = `⚡ Velocity: ${speedKmh} km/h`;
+
+  // 3. Soft Warning Check-in Banner
+  if (session.soft_warning_remaining !== null && session.soft_warning_remaining !== undefined && session.soft_warning_remaining > 0) {
+    $('check-in-banner').classList.remove('hidden');
+    $('check-in-countdown').textContent = session.soft_warning_remaining;
+  } else {
+    $('check-in-banner').classList.add('hidden');
+  }
+
+  // 4. Map Telemetry & Layers
+  if (session.planned_corridor && session.planned_corridor.length) {
+    plannedCorridorPoints = session.planned_corridor;
+    drawCorridor(session.planned_corridor);
+  }
+
+  if (session.destination_lat && session.destination_lon && !destMarker) {
+    destMarker = L.circleMarker([session.destination_lat, session.destination_lon], { radius: 9, color: '#8b5cf6', fillOpacity: 0.9 })
+      .addTo(map)
+      .bindTooltip(`🏁 ${session.destination_name || 'Destination'}`, { permanent: true })
+      .openTooltip();
+  }
 
   if (points.length) {
     const coordinates = points.map((point) => [point.latitude, point.longitude]);
@@ -354,12 +667,36 @@ function render(data) {
     ? events.slice().reverse().map((event) => `<div class="event"><time>${formatTime(event.created_at)}</time><span>${event.reason}</span><span class="event-state">${event.to_status}</span></div>`).join('')
     : '<p class="muted">Start an escort to begin the audit trail.</p>';
 
-  $('responders').innerHTML = alerts.length
-    ? alerts.map((alert) => `<div class="responder"><strong>${alert.reason}</strong><small>${alert.status}</small></div>`).join('')
-    : '<p class="muted">No incident in progress.</p>';
+  renderResponders(data);
 
-  $('hash-status').textContent = session.last_hash ? 'verified' : 'pending';
+  fetch(`/api/sessions/${session.id}/verify`).then((r) => r.json()).then((v) => {
+    $('hash-status').textContent = v.valid ? 'verified (tamper-free)' : 'hash failed';
+  }).catch(() => {});
 }
+
+function renderResponders(data) {
+  const alert = data.alerts ? data.alerts[0] : null;
+  if (!alert) return $('responders').innerHTML = '<p class="muted">No incident in progress.</p>';
+  const current = alert.current_responder;
+  $('responders').innerHTML = data.responders.map((responder, index) => {
+    const notified = index <= current;
+    const acknowledged = alert.acknowledged_by === responder.id;
+    const action = currentRole === 'guardian' && !acknowledged && alert.status === 'ALERTING' && index === current
+      ? `<button class="ack-button" onclick="ack('${alert.id}','${responder.id}')">Acknowledge</button>`
+      : acknowledged ? '<span class="ack">ACK</span>' : '';
+    return `<div class="responder"><span><strong>${responder.name}</strong><small>${responder.role} · ${notified ? 'Notified' : 'Queued'}</small></span>${action}</div>`;
+  }).join('');
+}
+
+window.ack = async (alertId, responderId) => {
+  try {
+    await api(`/api/alerts/${alertId}/acknowledge`, { method: 'POST', body: JSON.stringify({ responder_id: responderId }) });
+    toast('Responder acknowledgement recorded');
+    refresh();
+  } catch (error) {
+    toast(error.message);
+  }
+};
 
 async function refresh() {
   if (!sessionId) {
@@ -387,7 +724,7 @@ setInterval(clock, 1000);
 clock();
 
 if (sessionId) {
-  setRole('traveler');
+  setRole(currentRole || 'traveler');
   refresh();
   startTimers();
 } else {

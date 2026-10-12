@@ -348,7 +348,7 @@ h2 { font-size: 20px; }
 .muted { color: var(--muted); font-size: 12px; }
 .hidden { display: none !important; }
 
-@media (max-width: 980px) {
+  @media (max-width: 980px) {
   .workspace, .lower-grid { grid-template-columns: 1fr; }
   .status-strip { grid-template-columns: 1fr 1fr; }
   .shell { padding: 0 20px 32px; }
@@ -357,3 +357,109 @@ h2 { font-size: 20px; }
   .map-panel { padding: 10px; }
   #map { height: 380px; }
 }
+
+/* Sentinel Threat & Anomaly HUD */
+.risk-badge {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.risk-normal { background: #d6ece8; color: #075c5d; }
+.risk-elevated { background: #fdf3d8; color: #9c6c10; }
+.risk-critical { background: #fde2dc; color: #b82d1b; }
+
+.check-in-banner {
+  background: #fff8eb;
+  border: 2px solid #e6ae3f;
+  border-radius: 14px;
+  padding: 14px 20px;
+  margin-bottom: 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  animation: pulseBanner 2s infinite ease-in-out;
+}
+@keyframes pulseBanner {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(230, 174, 63, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(230, 174, 63, 0); }
+}
+.check-in-content { display: flex; align-items: center; gap: 12px; }
+.warning-icon { font-size: 26px; }
+.check-in-content strong { display: block; font-size: 14px; color: #9c6c10; }
+.check-in-content span { font-size: 12px; color: #64748b; }
+
+.hud-panel {
+  background: #f8fafc;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px;
+  margin: 14px 0;
+}
+.hud-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.hud-tag {
+  font-size: 10px;
+  font-weight: 800;
+  padding: 2px 7px;
+  border-radius: 4px;
+}
+.risk-bar-container {
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+.risk-bar-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.4s ease, background 0.4s ease;
+  background: var(--teal);
+}
+.hud-pills { display: flex; flex-direction: column; gap: 5px; }
+.hud-pill {
+  font-size: 11px;
+  font-weight: 600;
+  color: #334155;
+  background: #fff;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+}
+
+.panic-card {
+  text-align: center;
+  border: 2px solid var(--coral);
+}
+.panic-icon {
+  font-size: 48px;
+  animation: bounce 0.6s infinite alternate;
+}
+.panic-counter {
+  font-size: 64px;
+  font-weight: 900;
+  color: var(--coral);
+  margin: 12px 0 18px;
+  font-family: 'Space Grotesk';
+}
+@keyframes bounce {
+  from { transform: scale(1); }
+  to { transform: scale(1.15); }
+}
+
+.map-key .key-corridor {
+  background: #3b82f6;
+  border-radius: 2px;
+  height: 3px;
+  width: 14px;
+}
+.map-key .key-dest { background: #8b5cf6; }
+

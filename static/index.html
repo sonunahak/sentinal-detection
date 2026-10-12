@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>SentinelTrace | Escort operations</title>
+  <title>SentinelTrace | Intelligent Escort & Anomaly Operations</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
@@ -12,15 +12,19 @@
 <body>
   <main class="shell">
     <header class="topbar">
-      <a class="brand" href="/"><span class="brand-mark">ST</span><span>SentinelTrace</span></a>
-      <div class="topbar-meta"><span class="live-dot"></span><span>LOCAL PROTOTYPE</span><span id="clock">--:--:--</span></div>
+      <a class="brand" href="/"><span class="brand-mark">ST</span><span>SentinelTrace 2.0</span></a>
+      <div class="topbar-meta">
+        <span class="live-dot"></span>
+        <span id="system-badge">INTELLIGENT SENTINEL ACTIVE</span>
+        <span id="clock">--:--:--</span>
+      </div>
     </header>
 
     <section class="intro">
       <div>
-        <p class="eyebrow">Escort operations / command view</p>
+        <p class="eyebrow">Escort operations / Sentinel telemetry command</p>
         <h1>Keep the signal visible.</h1>
-        <p class="lede">A transparent safety monitor for the moments communication matters most.</p>
+        <p class="lede">AI-assisted anomaly detection, safe-corridor geofencing, and forensic tamper-proof audit trails.</p>
       </div>
       <div class="control-row">
         <button class="button button-outline" id="join-session">Join escort</button>
@@ -28,12 +32,37 @@
       </div>
     </section>
 
+    <!-- Two-Stage False Positive Soft Warning Banner -->
+    <div id="check-in-banner" class="check-in-banner hidden">
+      <div class="check-in-content">
+        <span class="warning-icon">⚠️</span>
+        <div>
+          <strong>Route Divergence Detected!</strong>
+          <span id="check-in-subtext">You have departed from your planned corridor. Still safe?</span>
+        </div>
+      </div>
+      <div class="check-in-actions">
+        <button class="button button-accent" id="confirm-check-in">I'm OK — Intentional Detour (<span id="check-in-countdown">30</span>s)</button>
+      </div>
+    </div>
+
     <section class="status-strip">
       <div class="state-wrap">
         <span class="state-pulse" id="state-pulse"></span>
         <div><span class="label">SESSION STATE</span><strong id="state">NO SESSION</strong></div>
       </div>
-      <div><span class="label">LAST CONTACT</span><strong id="last-contact">--</strong></div>
+      <div>
+        <span class="label">SENTINEL RISK INDEX</span>
+        <strong id="risk-display"><span class="risk-badge risk-normal" id="risk-pill">0% SAFE</span></strong>
+      </div>
+      <div>
+        <span class="label">TRAVEL MODE</span>
+        <strong id="mode-display">WALKING</strong>
+      </div>
+      <div>
+        <span class="label">LAST CONTACT</span>
+        <strong id="last-contact">--</strong>
+      </div>
     </section>
 
     <section class="workspace">
@@ -41,9 +70,11 @@
         <div id="map"></div>
         <div class="map-overlay">
           <span class="map-key"><i class="key-start"></i> Start</span>
+          <span class="map-key"><i class="key-corridor"></i> Corridor</span>
+          <span class="map-key"><i class="key-dest"></i> Dest</span>
           <span class="map-key"><i class="key-route"></i> Trail</span>
           <span class="map-key"><i class="key-last"></i> Last known</span>
-          <button class="button button-outline" id="recenter-route" type="button">Recenter route</button>
+          <button class="button button-outline" id="recenter-route" type="button">Recenter</button>
         </div>
       </div>
 
@@ -64,16 +95,40 @@
           </div>
         </div>
 
+        <!-- Sentinel Anomaly & Telemetry HUD -->
+        <div class="hud-panel">
+          <div class="hud-header">
+            <span class="label">ANOMALY & THREAT RADAR</span>
+            <span class="hud-tag" id="hud-level">NORMAL</span>
+          </div>
+          <div class="risk-bar-container">
+            <div class="risk-bar-fill" id="risk-bar-fill" style="width: 0%;"></div>
+          </div>
+          <div class="hud-pills">
+            <span class="hud-pill" id="pill-corridor">🛰️ Corridor: In Bounds</span>
+            <span class="hud-pill" id="pill-speed">⚡ Velocity: Normal</span>
+            <span class="hud-pill" id="pill-sensor">📱 Motion: Armed</span>
+          </div>
+        </div>
+
         <div class="metric-grid">
           <div><span class="label">DISTANCE</span><strong id="distance">0 m</strong></div>
+          <div><span class="label">CORRIDOR DEV</span><strong id="deviation-stat">0 m</strong></div>
         </div>
 
         <div class="panel-section" id="signal-controls">
-          <div class="section-title"><span>Signal controls</span><span class="tiny-status" id="signal-status">Offline</span></div>
+          <div class="section-title">
+            <span>Signal & Sentinel controls</span>
+            <span class="tiny-status" id="signal-status">Offline</span>
+          </div>
           <div class="control-row">
-            <button class="button button-accent" id="simulate">Simulate route</button>
             <button class="button button-outline" id="use-location">Use my location</button>
             <button class="icon-button" id="heartbeat" title="Send heartbeat now">♥</button>
+            <button class="button button-accent" id="simulate">Simulate on-path</button>
+          </div>
+          <div class="control-row">
+            <button class="button button-outline" id="simulate-detour" title="Demonstrate false positive soft warning">Simulate detour</button>
+            <button class="button button-outline" id="simulate-shake" title="Demonstrate panic gesture">Simulate shake</button>
           </div>
           <div class="control-row">
             <button class="button button-outline" id="duress">Trigger duress</button>
@@ -83,47 +138,100 @@
 
         <div class="observer-mode hidden" id="observer-mode">
           <span class="observer-icon">&#x1f6e1;</span>
-          <div><strong>Observer Mode</strong><span>Live telemetry monitoring active</span></div>
+          <div><strong>Observer Mode</strong><span>Live telemetry & anomaly monitoring active</span></div>
         </div>
 
         <div class="panel-section">
-          <div class="section-title"><span>Responders</span><span class="tiny-status">ACK required</span></div>
+          <div class="section-title"><span>Emergency responders</span><span class="tiny-status">ACK required</span></div>
           <div id="responders" class="responders"><p class="muted">No incident in progress.</p></div>
         </div>
 
         <div class="panel-section export-row">
-          <button class="button button-dark full" id="download">Download incident report</button>
-          <p class="fine-print">Known telemetry only. This prototype does not prove an attack or replace emergency services.</p>
+          <button class="button button-dark full" id="download">Download forensic report</button>
+          <p class="fine-print">Cryptographically chained telemetry with anomaly breakdown. Suitable for forensic review.</p>
         </div>
       </aside>
     </section>
 
     <section class="lower-grid">
       <div class="event-panel">
-        <div class="section-title"><span>Event timeline</span><span class="tiny-status" id="refresh-status">Live refresh</span></div>
+        <div class="section-title"><span>Audited event timeline</span><span class="tiny-status" id="refresh-status">Live refresh</span></div>
         <div id="events" class="events"><p class="muted">Start an escort to begin the audit trail.</p></div>
       </div>
 
       <div class="session-panel">
-        <p class="eyebrow">Session security</p>
-        <h2>Explicitly monitored.</h2>
-        <p>Telemetry is chained with SHA-256 so edits are detectable. Heartbeats are separate from location: even a stationary device must keep checking in.</p>
-        <div class="security-line"><span class="check">✓</span><span>Hash chain <strong id="hash-status">pending</strong></span></div>
+        <p class="eyebrow">Session security & forensics</p>
+        <h2>Cryptographically chained.</h2>
+        <p>Telemetry packets are sequentially chained with SHA-256. Cross-track corridor errors and sensor triggers are evaluated in real time.</p>
+        <div class="security-line">
+          <span class="check">✓</span>
+          <span>Hash chain: <strong id="hash-status">pending</strong></span>
+        </div>
       </div>
     </section>
   </main>
 
+  <!-- New Escort Modal with Mode & Geofence Configuration -->
   <div class="modal hidden" id="modal">
     <div class="modal-card">
       <button class="modal-close" id="close-modal">×</button>
-      <p class="eyebrow">Start a monitored walk</p>
+      <p class="eyebrow">Start a monitored walk or ride</p>
       <h2>New escort session</h2>
-      <label>Duration <select id="duration"><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">60 minutes</option></select></label>
+
+      <label>Travel Mode
+        <select id="travel-mode">
+          <option value="WALKING">🚶 Walking (Strict safe-corridor & velocity checks)</option>
+          <option value="TRANSIT">🛵 Transit / Cab (Vehicle corridor & higher speed threshold)</option>
+          <option value="FREE_ROAM">🧭 Free Roam (Heartbeat & sensor protection, no fixed corridor)</option>
+        </select>
+      </label>
+
+      <label>Destination (Optional)
+        <input id="destination-name" placeholder="e.g. Campus Library, Central Metro">
+      </label>
+
+      <div class="control-row" style="margin-top: 4px; margin-bottom: 12px;">
+        <button class="button button-outline full" id="pick-dest-map" type="button">📍 Set Destination on Map</button>
+      </div>
+
+      <label>Corridor Buffer Tolerance
+        <select id="corridor-tol">
+          <option value="80">80 meters (Tight corridor)</option>
+          <option value="120" selected>120 meters (Standard)</option>
+          <option value="250">250 meters (Wide urban corridor)</option>
+        </select>
+      </label>
+
+      <label>Session Duration
+        <select id="duration">
+          <option value="15">15 minutes</option>
+          <option value="30">30 minutes</option>
+          <option value="60">60 minutes</option>
+        </select>
+      </label>
+
       <div class="pin-grid">
         <label>Safe PIN<input id="safe-pin" value="1234" inputmode="numeric"></label>
         <label>Duress PIN<input id="duress-pin" value="9999" inputmode="numeric"></label>
       </div>
-      <button class="button button-accent full" id="start-session">Start escort</button>
+
+      <label>Telegram Chat ID (Optional)
+        <input id="telegram-chat-id" placeholder="e.g. 123456789 (for live phone dispatch)">
+      </label>
+
+      <button class="button button-accent full" id="start-session" style="margin-top: 14px;">Start escort</button>
+    </div>
+  </div>
+
+  <!-- Panic Gesture 5-second Countdown Overlay -->
+  <div id="panic-overlay" class="modal hidden">
+    <div class="modal-card panic-card">
+      <div class="panic-icon">🚨</div>
+      <h2>PANIC DETECTED!</h2>
+      <p>Violent motion / fall detected on your device.</p>
+      <p>Emergency distress will broadcast in:</p>
+      <div class="panic-counter" id="panic-counter-num">5</div>
+      <button class="button button-outline full" id="cancel-panic-btn">CANCEL (False Alarm)</button>
     </div>
   </div>
 
