@@ -463,3 +463,33 @@ h2 { font-size: 20px; }
 }
 .map-key .key-dest { background: #8b5cf6; }
 
+/* Turn-by-turn street navigation styling */
+.route-steps {
+  max-height: 165px;
+  overflow-y: auto;
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 4px;
+}
+.route-step {
+  font-size: 11px;
+  color: #1e293b;
+  background: #f8fafc;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid #e2e8f0;
+  border-left: 3px solid #2563eb;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.35;
+}
+.step-num {
+  font-weight: 800;
+  color: #2563eb;
+  min-width: 18px;
+  font-size: 10px;
+}
+

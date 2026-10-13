@@ -23,7 +23,7 @@ from reportlab.lib.pagesizes import letter
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-from app.engine import calculate_corridor_deviation, evaluate_anomaly, haversine
+from app.engine import calculate_corridor_deviation, evaluate_anomaly, fetch_osrm_route, haversine
 from app.notifier import dispatch_emergency_alert
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -388,6 +388,21 @@ def index() -> FileResponse:
 def health() -> dict[str, str]:
     check_timeouts()
     return {"status": "ok"}
+
+
+@app.get("/api/routing/route")
+async def routing_route(
+    start_lat: float,
+    start_lon: float,
+    dest_lat: float,
+    dest_lon: float,
+    mode: str = "walking",
+) -> dict[str, Any]:
+    """
+    Computes exact street-level pedestrian or vehicle routing using OSRM
+    with high-fidelity geometric fallback.
+    """
+    return await fetch_osrm_route(start_lat, start_lon, dest_lat, dest_lon, mode)
 
 
 @app.get("/api/responders")

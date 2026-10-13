@@ -216,13 +216,22 @@ $('pick-dest-map').onclick = () => {
       } catch (err) {}
     }
 
-    // Generate corridor segments between start and destination
-    plannedCorridorPoints = [
-      [startLat, startLng],
-      [startLat + (destLat - startLat) * 0.35, startLng + (destLng - startLng) * 0.25],
-      [startLat + (destLat - startLat) * 0.70, startLng + (destLng - startLng) * 0.75],
-      [destLat, destLng],
-    ];
+    // Fetch real turn-by-turn street routing from OSRM
+    toast('Calculating street network route via OSRM...');
+    try {
+      const mode = $('travel-mode') ? $('travel-mode').value : 'WALKING';
+      const routeData = await api(`/api/routing/route?start_lat=${startLat}&start_lon=${startLng}&dest_lat=${destLat}&dest_lon=${destLng}&mode=${mode}`);
+      plannedCorridorPoints = routeData.corridor;
+      renderRouteSteps(routeData.steps, routeData.distance_m, routeData.duration_s, routeData.provider);
+      toast(`Real street route loaded (${Math.round(routeData.distance_m)}m via ${routeData.provider})`);
+    } catch (err) {
+      plannedCorridorPoints = [
+        [startLat, startLng],
+        [startLat + (destLat - startLat) * 0.35, startLng + (destLng - startLng) * 0.25],
+        [startLat + (destLat - startLat) * 0.70, startLng + (destLng - startLng) * 0.75],
+        [destLat, destLng],
+      ];
+    }
 
     plannedDestination = { lat: destLat, lng: destLng, name: $('destination-name').value || 'Selected Destination' };
 
@@ -240,9 +249,39 @@ $('pick-dest-map').onclick = () => {
       $('destination-name').value = `Dest (${destLat.toFixed(4)}, ${destLng.toFixed(4)})`;
     }
     openModal();
-    toast('Destination corridor designated!');
   });
 };
+
+function escapeHtml(str) {
+  return String(str).replace(/[&<>'"]/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    "'": '&#39;',
+    '"': '&quot;',
+  })[char]);
+}
+
+function renderRouteSteps(steps = [], distanceM = 0, durationS = 0, provider = 'OSRM OpenStreetMap') {
+  const stepsEl = $('route-steps');
+  const providerEl = $('routing-provider');
+  if (providerEl) providerEl.textContent = provider === 'OSRM_OPENSTREETMAP' ? 'OSRM Street Nav' : 'Fallback Nav';
+  if (!stepsEl) return;
+  if (!steps.length) {
+    stepsEl.innerHTML = '<p class="muted">No turn-by-turn directions computed yet.</p>';
+    return;
+  }
+  const distStr = distanceM > 1000 ? `${(distanceM / 1000).toFixed(2)} km` : `${Math.round(distanceM)} m`;
+  const durStr = durationS > 60 ? `${Math.round(durationS / 60)} mins` : `${Math.round(durationS)} secs`;
+  let html = `<div style="font-size: 11px; font-weight: 700; color: #0d8179; margin-bottom: 6px;">📏 Est. Walking: ${distStr} (~${durStr})</div>`;
+  html += steps.map((step, idx) => `
+    <div class="route-step">
+      <span class="step-num">${idx + 1}.</span>
+      <span>${escapeHtml(step)}</span>
+    </div>
+  `).join('');
+  stepsEl.innerHTML = html;
+}
 
 function drawCorridor(points) {
   if (!points || points.length < 2) {

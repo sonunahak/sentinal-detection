@@ -138,3 +138,27 @@ def test_panic_endpoint_triggers_instant_distress():
     session_info = client.get(f"/api/sessions/{sid}").json()
     assert session_info["session"]["status"] == "DISTRESS"
     assert "Shake Panic" in session_info["alerts"][0]["reason"]
+
+
+def test_osrm_street_routing_endpoint():
+    # Test routing between two campus coordinates
+    res = client.get(
+        "/api/routing/route",
+        params={
+            "start_lat": 20.2961,
+            "start_lon": 85.8245,
+            "dest_lat": 20.3010,
+            "dest_lon": 85.8300,
+            "mode": "walking",
+        },
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["success"] is True
+    assert "corridor" in data
+    assert len(data["corridor"]) >= 2
+    assert "steps" in data
+    assert len(data["steps"]) >= 1
+    assert data["distance_m"] > 0
+    assert data["provider"] in ("OSRM_OPENSTREETMAP", "GEOMETRIC_FALLBACK")
+
