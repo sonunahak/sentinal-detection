@@ -442,6 +442,15 @@ $('simulate-detour').onclick = async () => {
   await sendPoint(offLat, offLng, { speed: 1.3, accuracy: 6 });
 };
 
+$('simulate-speed').onclick = async () => {
+  if (!sessionId) return toast('Start an escort session first');
+  // Send vehicular speed (12.5 m/s = 45 km/h) in walking mode
+  const lat = (plannedDestination ? plannedDestination.lat : 20.2961) + 0.001;
+  const lng = (plannedDestination ? plannedDestination.lng : 85.8245) + 0.001;
+  toast('Simulating vehicular speed: 45 km/h in Walking mode...');
+  await sendPoint(lat, lng, { speed: 12.5, accuracy: 5 });
+};
+
 // -------------------------------------------------------------
 // Telemetry & GPS Tracking
 // -------------------------------------------------------------
