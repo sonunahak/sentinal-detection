@@ -162,3 +162,63 @@ def test_osrm_street_routing_endpoint():
     assert data["distance_m"] > 0
     assert data["provider"] in ("OSRM_OPENSTREETMAP", "GEOMETRIC_FALLBACK")
 
+
+def test_vehicular_speed_anomaly_triggers_soft_warning():
+    corridor = [[20.2961, 85.8245], [20.3000, 85.8300]]
+    sess = client.post(
+        "/api/sessions",
+        json={"travel_mode": "WALKING", "planned_corridor": corridor},
+    ).json()["session"]
+    sid = sess["id"]
+
+    # Point directly on the corridor, but speed is 12.5 m/s (45 km/h in WALKING mode)
+    veh_point = {
+        "sequence": 1,
+        "event_time": "2026-01-01T12:00:00+00:00",
+        "latitude": 20.2961,
+        "longitude": 85.8245,
+        "speed": 12.5,
+    }
+    res = client.post(f"/api/sessions/{sid}/telemetry", json=veh_point)
+    assert res.status_code == 200
+    data = res.json()
+    assert "VEHICULAR_SPEED_ANOMALY" in data["anomaly_flags"]
+    assert data["risk_score"] >= 40
+    assert data["risk_level"] == "ELEVATED"
+
+    # Soft warning countdown should be active on the session
+    session_info = client.get(f"/api/sessions/{sid}").json()["session"]
+    assert session_info["soft_warning_remaining"] is not None
+    assert "Vehicular speed" in session_info["soft_warning_reason"]
+
+
+def test_prolonged_dwell_immobility_triggers_soft_warning():
+    corridor = [[20.2961, 85.8245], [20.3000, 85.8300]]
+    sess = client.post(
+        "/api/sessions",
+        json={"travel_mode": "WALKING", "planned_corridor": corridor},
+    ).json()["session"]
+    sid = sess["id"]
+
+    # Point stationary with dwell_seconds=210 (> 180s threshold)
+    dwell_point = {
+        "sequence": 1,
+        "event_time": "2026-01-01T12:00:00+00:00",
+        "latitude": 20.2961,
+        "longitude": 85.8245,
+        "speed": 0.0,
+        "dwell_seconds": 210,
+    }
+    res = client.post(f"/api/sessions/{sid}/telemetry", json=dwell_point)
+    assert res.status_code == 200
+    data = res.json()
+    assert "PROLONGED_DWELL" in data["anomaly_flags"]
+    assert data["risk_score"] >= 25
+    assert data["risk_level"] == "ELEVATED"
+
+    # Soft warning countdown should be active on the session
+    session_info = client.get(f"/api/sessions/{sid}").json()["session"]
+    assert session_info["soft_warning_remaining"] is not None
+    assert "Prolonged immobility" in session_info["soft_warning_reason"]
+
+

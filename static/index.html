@@ -35,14 +35,14 @@
     <!-- Two-Stage False Positive Soft Warning Banner -->
     <div id="check-in-banner" class="check-in-banner hidden">
       <div class="check-in-content">
-        <span class="warning-icon">⚠️</span>
+        <span class="warning-icon" id="check-in-icon">⚠️</span>
         <div>
-          <strong>Route Divergence Detected!</strong>
+          <strong id="check-in-title">Route Divergence Detected!</strong>
           <span id="check-in-subtext">You have departed from your planned corridor. Still safe?</span>
         </div>
       </div>
       <div class="check-in-actions">
-        <button class="button button-accent" id="confirm-check-in">I'm OK — Intentional Detour (<span id="check-in-countdown">30</span>s)</button>
+        <button class="button button-accent" id="confirm-check-in"><span id="check-in-btn-text">I'm OK — Confirm Safe</span> (<span id="check-in-countdown">35</span>s)</button>
       </div>
     </div>
 
@@ -107,8 +107,10 @@
           <div class="hud-pills">
             <span class="hud-pill" id="pill-corridor">🛰️ Corridor: In Bounds</span>
             <span class="hud-pill" id="pill-speed">⚡ Velocity: Normal</span>
+            <span class="hud-pill" id="pill-dwell">⏱️ Dwell: 0s</span>
             <span class="hud-pill" id="pill-sensor">📱 Motion: Armed</span>
           </div>
+          <div id="active-flags-container" class="active-flags-container"></div>
         </div>
 
         <div class="metric-grid">
@@ -128,10 +130,11 @@
           </div>
           <div class="control-row">
             <button class="button button-outline" id="simulate-detour" title="Demonstrate false positive soft warning">Simulate detour</button>
-            <button class="button button-outline" id="simulate-speed" title="Demonstrate vehicular speed mismatch">Simulate speed</button>
-            <button class="button button-outline" id="simulate-shake" title="Demonstrate panic gesture">Simulate shake</button>
+            <button class="button button-outline" id="simulate-speed" title="Demonstrate vehicular speed mismatch (45 km/h in walking mode)">Simulate speed (45km/h)</button>
+            <button class="button button-outline" id="simulate-dwell" title="Demonstrate prolonged immobility ambush scenario (>3 mins stationary)">Simulate dwell (3m)</button>
           </div>
           <div class="control-row">
+            <button class="button button-outline" id="simulate-shake" title="Demonstrate panic gesture">Simulate shake</button>
             <button class="button button-outline" id="duress">Trigger duress</button>
             <button class="button button-outline" id="stop-signal">Stop signal</button>
           </div>

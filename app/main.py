@@ -71,6 +71,8 @@ def init_db() -> None:
             risk_breakdown TEXT,
             telegram_chat_id TEXT,
             soft_warning_at TEXT,
+            soft_warning_reason TEXT,
+            stationary_since TEXT,
             is_check_in_acknowledged INTEGER DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS telemetry (
@@ -138,6 +140,10 @@ def init_db() -> None:
             db.execute("ALTER TABLE sessions ADD COLUMN telegram_chat_id TEXT")
         if "soft_warning_at" not in session_cols:
             db.execute("ALTER TABLE sessions ADD COLUMN soft_warning_at TEXT")
+        if "soft_warning_reason" not in session_cols:
+            db.execute("ALTER TABLE sessions ADD COLUMN soft_warning_reason TEXT")
+        if "stationary_since" not in session_cols:
+            db.execute("ALTER TABLE sessions ADD COLUMN stationary_since TEXT")
         if "is_check_in_acknowledged" not in session_cols:
             db.execute("ALTER TABLE sessions ADD COLUMN is_check_in_acknowledged INTEGER DEFAULT 0")
 
@@ -188,6 +194,7 @@ class TelemetryIn(BaseModel):
     bearing: float | None = Field(default=None, ge=0, lt=360)
     trigger_type: str = Field(default="NORMAL")
     sensor_accel_peak: float | None = Field(default=None, ge=0)
+    dwell_seconds: int | None = Field(default=None, ge=0)
 
 
 class PinIn(BaseModel):
@@ -359,13 +366,14 @@ def check_timeouts() -> None:
             elapsed = current_epoch - session["last_telemetry_epoch"]
             sid = session["id"]
 
-            # 1. Soft check-in timeout verification (Two-stage off-route escalation)
+            # 1. Soft check-in timeout verification (Two-stage anomaly escalation)
             if session["soft_warning_at"] and not session["is_check_in_acknowledged"]:
                 soft_epoch = int(datetime.fromisoformat(session["soft_warning_at"]).timestamp())
                 if (current_epoch - soft_epoch) > SOFT_CHECK_IN_TIMEOUT_SECONDS:
-                    transition(db, sid, session["status"], "DISTRESS", "Unacknowledged safe-corridor divergence")
-                    make_alert(db, sid, "Unacknowledged safe-corridor divergence: Traveler off route", risk_score=85)
-                    db.execute("UPDATE sessions SET soft_warning_at = NULL WHERE id = ?", (sid,))
+                    reason = session["soft_warning_reason"] or "Unacknowledged safe-corridor divergence"
+                    transition(db, sid, session["status"], "DISTRESS", f"Unacknowledged check-in: {reason}")
+                    make_alert(db, sid, f"Unacknowledged check-in timeout: {reason}", risk_score=85)
+                    db.execute("UPDATE sessions SET soft_warning_at = NULL, soft_warning_reason = NULL WHERE id = ?", (sid,))
                     continue
 
             # 2. Heartbeat dead-man switch
@@ -522,14 +530,14 @@ def check_in_detour(session_id: str, payload: CheckInIn) -> dict[str, Any]:
         sid = session["id"]
         timestamp = now_iso()
         db.execute(
-            "UPDATE sessions SET is_check_in_acknowledged = 1, soft_warning_at = NULL WHERE id = ?",
+            "UPDATE sessions SET is_check_in_acknowledged = 1, soft_warning_at = NULL, soft_warning_reason = NULL WHERE id = ?",
             (sid,),
         )
         db.execute(
             "INSERT INTO state_events(session_id, from_status, to_status, reason, created_at) VALUES(?,?,?,?,?)",
             (sid, session["status"], session["status"], f"Check-in: {payload.reason}", timestamp),
         )
-    return {"status": "acknowledged", "message": "Detour verified as safe"}
+    return {"status": "acknowledged", "message": "Anomaly verified as safe by traveler"}
 
 
 @app.post("/api/sessions/{session_id}/panic")
@@ -586,13 +594,27 @@ def telemetry(session_id: str, payload: TelemetryIn) -> dict[str, Any]:
 
         # Calculate dwell time in seconds if stationary
         dwell_seconds = 0
-        if previous and distance < 5.0 and payload.speed is not None and payload.speed < 0.5:
-            try:
-                prev_time = datetime.fromisoformat(previous["event_time"]).timestamp()
-                curr_time = datetime.fromisoformat(payload.event_time).timestamp()
-                dwell_seconds = int(max(0.0, curr_time - prev_time))
-            except Exception:
-                pass
+        if payload.dwell_seconds is not None:
+            dwell_seconds = int(payload.dwell_seconds)
+            if session["stationary_since"] is None:
+                db.execute("UPDATE sessions SET stationary_since = ? WHERE id = ?", (payload.event_time, session_id))
+        else:
+            is_stationary = (payload.speed is not None and payload.speed < 0.8) and (not previous or distance < 8.0)
+            if is_stationary:
+                stationary_since = session["stationary_since"]
+                if not stationary_since:
+                    stationary_since = payload.event_time
+                    db.execute("UPDATE sessions SET stationary_since = ? WHERE id = ?", (stationary_since, session_id))
+                try:
+                    stat_epoch = datetime.fromisoformat(stationary_since).timestamp()
+                    curr_epoch = datetime.fromisoformat(payload.event_time).timestamp()
+                    dwell_seconds = int(max(0.0, curr_epoch - stat_epoch))
+                except Exception:
+                    dwell_seconds = 0
+            else:
+                if session["stationary_since"] is not None and (distance >= 15.0 or (payload.speed and payload.speed >= 1.2)):
+                    db.execute("UPDATE sessions SET stationary_since = NULL WHERE id = ?", (session_id,))
+                dwell_seconds = 0
 
         anomaly_eval = evaluate_anomaly(
             travel_mode=mode,
@@ -617,13 +639,30 @@ def telemetry(session_id: str, payload: TelemetryIn) -> dict[str, Any]:
             transition(db, session_id, session["status"], "DISTRESS", reason)
             make_alert(db, session_id, reason, risk_score=100, latitude=payload.latitude, longitude=payload.longitude)
 
-        # 3. Soft Warning Trigger (Off-route detected, starts 35s check-in timer)
-        elif "OFF_ROUTE_DEVIATION" in flags and not is_ack and session["soft_warning_at"] is None:
-            db.execute("UPDATE sessions SET soft_warning_at = ? WHERE id = ?", (now_iso(), session_id))
-            db.execute(
-                "INSERT INTO state_events(session_id, from_status, to_status, reason, created_at) VALUES(?,?,?,?,?)",
-                (session_id, session["status"], session["status"], f"Soft check-in prompted: {deviation_m:.1f}m off corridor", now_iso()),
+        # 3. Soft Warning Trigger (Off-route deviation, vehicular speed mismatch, or prolonged dwell)
+        else:
+            has_soft_anomaly = bool(
+                {"OFF_ROUTE_DEVIATION", "VEHICULAR_SPEED_ANOMALY", "PROLONGED_DWELL"}.intersection(flags)
+                or risk_score >= 35
             )
+            if has_soft_anomaly and not is_ack and session["soft_warning_at"] is None:
+                if "VEHICULAR_SPEED_ANOMALY" in flags:
+                    soft_reason = f"Vehicular speed anomaly: {anomaly_eval['breakdown']['speed_kmh']} km/h in WALKING mode"
+                elif "PROLONGED_DWELL" in flags:
+                    soft_reason = f"Prolonged immobility detected: stationary for {dwell_seconds}s"
+                elif "OFF_ROUTE_DEVIATION" in flags:
+                    soft_reason = f"Safe corridor divergence: {deviation_m:.1f}m off route"
+                else:
+                    soft_reason = f"Elevated threat index: {risk_score}%"
+
+                db.execute(
+                    "UPDATE sessions SET soft_warning_at = ?, soft_warning_reason = ? WHERE id = ?",
+                    (now_iso(), soft_reason, session_id),
+                )
+                db.execute(
+                    "INSERT INTO state_events(session_id, from_status, to_status, reason, created_at) VALUES(?,?,?,?,?)",
+                    (session_id, session["status"], session["status"], f"Soft check-in prompted: {soft_reason}", now_iso()),
+                )
 
         # 4. Cryptographic Hash-Chain Computation (strictly backward-compatible record structure)
         record = {
@@ -682,6 +721,7 @@ def telemetry(session_id: str, payload: TelemetryIn) -> dict[str, Any]:
         "risk_level": anomaly_eval["risk_level"],
         "anomaly_flags": flags,
         "deviation_m": deviation_m,
+        "dwell_seconds": dwell_seconds,
     }
 
 

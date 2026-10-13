@@ -129,31 +129,39 @@ def evaluate_anomaly(
     if travel_mode == "WALKING":
         if speed_kmh > 24.0:
             # Sudden vehicular speed while in walking mode (possible vehicle abduction / forced transit)
-            speed_score = 25.0
-            flags.append("VEHICULAR_SPEED_ANOMALY")
+            if is_check_in_acknowledged:
+                speed_score = 10.0
+                flags.append("RIDE_ACKNOWLEDGED")
+            else:
+                speed_score = min(45.0, 30.0 + (speed_kmh - 24.0) * 0.7)
+                flags.append("VEHICULAR_SPEED_ANOMALY")
         elif speed_kmh > 12.0:
-            speed_score = 12.0
+            speed_score = 15.0
             flags.append("HIGH_VELOCITY_SPRINT")
     elif travel_mode == "TRANSIT":
         if speed_kmh > 130.0:
-            speed_score = 15.0
+            speed_score = 25.0
             flags.append("EXCESSIVE_TRANSIT_SPEED")
 
     # 3. Dwell / Immobility Risk
-    # Extended immobility > 180 seconds away from start/dest
+    # Extended immobility > 180 seconds (3 minutes) away from start/dest
     if dwell_seconds > 180 and speed_kmh < 1.0 and travel_mode != "FREE_ROAM":
-        dwell_score = min(20.0, 5.0 + (dwell_seconds - 180) / 30.0)
-        flags.append("PROLONGED_DWELL")
+        if is_check_in_acknowledged:
+            dwell_score = 8.0
+            flags.append("DWELL_ACKNOWLEDGED")
+        else:
+            dwell_score = min(35.0, 25.0 + ((dwell_seconds - 180) / 60.0) * 5.0)
+            flags.append("PROLONGED_DWELL")
 
     # 4. Sensor & Direct Trigger Anomaly
     if trigger_type == "SHAKE_PANIC":
-        sensor_score = 40.0
+        sensor_score = 50.0
         flags.append("PANIC_SHAKE_DETECTED")
     elif trigger_type == "FALL_DETECTED":
-        sensor_score = 35.0
+        sensor_score = 45.0
         flags.append("IMPACT_FALL_DETECTED")
     elif sensor_accel_peak is not None and sensor_accel_peak > 30.0:
-        sensor_score = 20.0
+        sensor_score = 25.0
         flags.append("HIGH_G_FORCE_IMPACT")
 
     # Composite sum clamped between 0 and 100
@@ -161,7 +169,12 @@ def evaluate_anomaly(
 
     if total_score >= 70 or "PANIC_SHAKE_DETECTED" in flags or "IMPACT_FALL_DETECTED" in flags:
         level = "CRITICAL"
-    elif total_score >= 35 or "OFF_ROUTE_DEVIATION" in flags:
+    elif (
+        total_score >= 25
+        or "OFF_ROUTE_DEVIATION" in flags
+        or "VEHICULAR_SPEED_ANOMALY" in flags
+        or "PROLONGED_DWELL" in flags
+    ):
         level = "ELEVATED"
     else:
         level = "NORMAL"
@@ -173,6 +186,7 @@ def evaluate_anomaly(
         "sensor_score": round(sensor_score, 1),
         "deviation_m": deviation_m,
         "speed_kmh": round(speed_kmh, 1),
+        "dwell_seconds": dwell_seconds,
         "level": level,
     }
 

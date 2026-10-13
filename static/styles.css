@@ -493,3 +493,52 @@ h2 { font-size: 20px; }
   font-size: 10px;
 }
 
+/* Active Forensic Anomaly Flag Badges in HUD */
+.active-flags-container {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.flag-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 4px 8px;
+  border-radius: 6px;
+  line-height: 1.2;
+}
+.flag-badge.speed {
+  background: #fdf3d8;
+  color: #9c6c10;
+  border: 1px solid #e6ae3f;
+}
+.flag-badge.dwell {
+  background: #fdf3d8;
+  color: #9c6c10;
+  border: 1px solid #e6ae3f;
+}
+.flag-badge.route {
+  background: #fdf3d8;
+  color: #9c6c10;
+  border: 1px solid #e6ae3f;
+}
+.flag-badge.panic {
+  background: #fde2dc;
+  color: #b82d1b;
+  border: 1px solid #e7654f;
+  animation: pulseFlag 1.5s infinite;
+}
+.flag-badge.ack {
+  background: #edf8f6;
+  color: #0d8179;
+  border: 1px solid #0d8179;
+}
+@keyframes pulseFlag {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.65; }
+}
+
+

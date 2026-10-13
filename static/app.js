@@ -536,6 +536,15 @@ $('simulate-speed').onclick = async () => {
   await sendPoint(anchor[0], anchor[1], { speed: 12.5, accuracy: 5 });
 };
 
+$('simulate-dwell').onclick = async () => {
+  if (!sessionId) return toast('Start an escort session first');
+  const anchor = (plannedCorridorPoints && plannedCorridorPoints.length > 1)
+    ? plannedCorridorPoints[1]
+    : (plannedStart ? [plannedStart.lat, plannedStart.lng] : [20.2961, 85.8245]);
+  toast('Simulating prolonged dwell: stationary for >3 minutes (Ambush check)...');
+  await sendPoint(anchor[0], anchor[1], { speed: 0.0, accuracy: 3 }, 'NORMAL', 210);
+};
+
 // -------------------------------------------------------------
 // Telemetry & GPS Tracking
 // -------------------------------------------------------------
@@ -567,23 +576,27 @@ $('use-location').onclick = () => {
   armMotionGuard();
 };
 
-async function sendPoint(latitude, longitude, coords = {}, triggerType = 'NORMAL') {
+async function sendPoint(latitude, longitude, coords = {}, triggerType = 'NORMAL', dwellSeconds = null) {
   if (!sessionId) return;
   seq += 1;
   try {
+    const payload = {
+      event_id: `gps-${sessionId}-${seq}-${Date.now()}`,
+      sequence: seq,
+      event_time: new Date().toISOString(),
+      latitude,
+      longitude,
+      accuracy: coords.accuracy ?? null,
+      speed: coords.speed ?? null,
+      bearing: coords.heading ?? null,
+      trigger_type: triggerType,
+    };
+    if (dwellSeconds !== null && dwellSeconds !== undefined) {
+      payload.dwell_seconds = dwellSeconds;
+    }
     const res = await api(`/api/sessions/${sessionId}/telemetry`, {
       method: 'POST',
-      body: JSON.stringify({
-        event_id: `gps-${sessionId}-${seq}-${Date.now()}`,
-        sequence: seq,
-        event_time: new Date().toISOString(),
-        latitude,
-        longitude,
-        accuracy: coords.accuracy ?? null,
-        speed: coords.speed ?? null,
-        bearing: coords.heading ?? null,
-        trigger_type: triggerType,
-      }),
+      body: JSON.stringify(payload),
     });
 
     if (res.anomaly_flags && res.anomaly_flags.length) {
@@ -718,12 +731,85 @@ function render(data) {
   }
 
   const speedKmh = lastPoint && lastPoint.speed ? (lastPoint.speed * 3.6).toFixed(1) : '0.0';
-  $('pill-speed').textContent = `⚡ Velocity: ${speedKmh} km/h`;
+  const flags = lastPoint && lastPoint.anomaly_flags ? lastPoint.anomaly_flags : [];
+
+  if (flags.includes('VEHICULAR_SPEED_ANOMALY')) {
+    $('pill-speed').textContent = `⚡ Velocity: ${speedKmh} km/h (ANOMALY)`;
+    $('pill-speed').style.borderColor = '#e7654f';
+  } else if (Number(speedKmh) > 12.0) {
+    $('pill-speed').textContent = `⚡ Velocity: ${speedKmh} km/h (Sprint)`;
+    $('pill-speed').style.borderColor = '#e6ae3f';
+  } else {
+    $('pill-speed').textContent = `⚡ Velocity: ${speedKmh} km/h`;
+    $('pill-speed').style.borderColor = '#e2e8f0';
+  }
+
+  const dwellSecs = (lastPoint && lastPoint.dwell_seconds !== undefined)
+    ? Number(lastPoint.dwell_seconds)
+    : (session.risk_breakdown && session.risk_breakdown.dwell_seconds ? Number(session.risk_breakdown.dwell_seconds) : 0);
+
+  if ($('pill-dwell')) {
+    if (dwellSecs > 180 || flags.includes('PROLONGED_DWELL')) {
+      $('pill-dwell').textContent = `⏱️ Dwell: ${dwellSecs}s (ANOMALY)`;
+      $('pill-dwell').style.borderColor = '#e7654f';
+    } else {
+      $('pill-dwell').textContent = `⏱️ Dwell: ${dwellSecs}s`;
+      $('pill-dwell').style.borderColor = '#e2e8f0';
+    }
+  }
+
+  // Active Forensic Flags container
+  const flagsContainer = $('active-flags-container');
+  if (flagsContainer) {
+    if (!flags.length) {
+      flagsContainer.innerHTML = '';
+    } else {
+      flagsContainer.innerHTML = flags.map((f) => {
+        let cls = 'route';
+        let label = f;
+        if (f === 'VEHICULAR_SPEED_ANOMALY') {
+          cls = 'speed';
+          label = '🚨 VEHICULAR_SPEED_ANOMALY (Car Invariant)';
+        } else if (f === 'PROLONGED_DWELL') {
+          cls = 'dwell';
+          label = '⏱️ PROLONGED_DWELL (>3m Immobility)';
+        } else if (f === 'OFF_ROUTE_DEVIATION') {
+          cls = 'route';
+          label = '⚠️ OFF_ROUTE_DEVIATION (Corridor)';
+        } else if (f.includes('PANIC') || f.includes('FALL')) {
+          cls = 'panic';
+          label = `🚨 ${f}`;
+        } else if (f.includes('ACKNOWLEDGED')) {
+          cls = 'ack';
+          label = `✓ ${f}`;
+        }
+        return `<span class="flag-badge ${cls}">${label}</span>`;
+      }).join('');
+    }
+  }
 
   // 3. Soft Warning Check-in Banner
   if (session.soft_warning_remaining !== null && session.soft_warning_remaining !== undefined && session.soft_warning_remaining > 0) {
     $('check-in-banner').classList.remove('hidden');
     $('check-in-countdown').textContent = session.soft_warning_remaining;
+
+    const reason = session.soft_warning_reason || '';
+    if (flags.includes('VEHICULAR_SPEED_ANOMALY') || reason.includes('speed')) {
+      if ($('check-in-icon')) $('check-in-icon').textContent = '🚨';
+      if ($('check-in-title')) $('check-in-title').textContent = 'Vehicular Speed Mismatch Detected!';
+      if ($('check-in-subtext')) $('check-in-subtext').textContent = `Speed of ${speedKmh} km/h detected in WALKING mode (Possible forced car transit). Still safe?`;
+      if ($('check-in-btn-text')) $('check-in-btn-text').textContent = "I'm OK — Boarded Ride";
+    } else if (flags.includes('PROLONGED_DWELL') || reason.includes('immobility') || reason.includes('stationary')) {
+      if ($('check-in-icon')) $('check-in-icon').textContent = '⏱️';
+      if ($('check-in-title')) $('check-in-title').textContent = 'Prolonged Immobility Detected!';
+      if ($('check-in-subtext')) $('check-in-subtext').textContent = `Stationary for ${dwellSecs}s in unverified zone (Ambush check). Still safe?`;
+      if ($('check-in-btn-text')) $('check-in-btn-text').textContent = "I'm OK — Just Paused";
+    } else {
+      if ($('check-in-icon')) $('check-in-icon').textContent = '⚠️';
+      if ($('check-in-title')) $('check-in-title').textContent = 'Route Divergence Detected!';
+      if ($('check-in-subtext')) $('check-in-subtext').textContent = `Departed ${Math.round(deviationM)}m from planned corridor. Still safe?`;
+      if ($('check-in-btn-text')) $('check-in-btn-text').textContent = "I'm OK — Intentional Detour";
+    }
   } else {
     $('check-in-banner').classList.add('hidden');
   }
