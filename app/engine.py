@@ -198,58 +198,65 @@ async def fetch_osrm_route(
     """
     import httpx
 
-    profile = "car" if mode.lower() in ("transit", "car", "drive") else "foot"
-    # OSRM public API requires {lon},{lat} order
-    url = (
-        f"https://router.project-osrm.org/route/v1/{profile}/"
-        f"{start_lon:.6f},{start_lat:.6f};{dest_lon:.6f},{dest_lat:.6f}"
-        f"?overview=full&geometries=geojson&steps=true"
-    )
+    profiles = ["foot", "car"] if mode.lower() in ("walking", "foot") else ["car", "foot"]
 
-    try:
-        async with httpx.AsyncClient(timeout=6.0) as client:
-            resp = await client.get(url)
-            if resp.is_success:
-                data = resp.json()
-                if data.get("routes") and len(data["routes"]) > 0:
-                    route = data["routes"][0]
-                    # GeoJSON is [lon, lat] -> convert to Leaflet's [lat, lon]
-                    raw_coords = route.get("geometry", {}).get("coordinates", [])
-                    corridor_lat_lon = [[round(c[1], 6), round(c[0], 6)] for c in raw_coords]
+    for profile in profiles:
+        url = (
+            f"https://router.project-osrm.org/route/v1/{profile}/"
+            f"{start_lon:.6f},{start_lat:.6f};{dest_lon:.6f},{dest_lat:.6f}"
+            f"?overview=full&geometries=geojson&steps=true"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(url)
+                if resp.is_success:
+                    data = resp.json()
+                    if data.get("routes") and len(data["routes"]) > 0:
+                        route = data["routes"][0]
+                        raw_coords = route.get("geometry", {}).get("coordinates", [])
+                        corridor_lat_lon = [[round(c[1], 6), round(c[0], 6)] for c in raw_coords]
 
-                    steps: list[str] = []
-                    legs = route.get("legs", [])
-                    for leg in legs:
-                        for step in leg.get("steps", []):
-                            maneuver = step.get("maneuver", {})
-                            m_type = maneuver.get("type", "proceed").capitalize()
-                            modifier = maneuver.get("modifier", "")
-                            name = step.get("name", "")
-                            desc = f"{m_type} {modifier}".strip()
-                            if name:
-                                desc += f" onto {name}"
-                            dist_m = step.get("distance", 0)
-                            if dist_m > 0:
-                                desc += f" ({int(dist_m)}m)"
-                            steps.append(desc)
+                        if corridor_lat_lon:
+                            # Physically anchor start and destination pins to the street corridor
+                            full_corridor = [[round(start_lat, 6), round(start_lon, 6)]]
+                            for pt in corridor_lat_lon:
+                                if haversine(full_corridor[-1][0], full_corridor[-1][1], pt[0], pt[1]) > 3.0:
+                                    full_corridor.append(pt)
+                            if haversine(full_corridor[-1][0], full_corridor[-1][1], dest_lat, dest_lon) > 3.0:
+                                full_corridor.append([round(dest_lat, 6), round(dest_lon, 6)])
 
-                    if corridor_lat_lon and len(corridor_lat_lon) >= 2:
-                        return {
-                            "success": True,
-                            "provider": "OSRM_OPENSTREETMAP",
-                            "corridor": corridor_lat_lon,
-                            "distance_m": round(route.get("distance", 0), 1),
-                            "duration_s": round(route.get("duration", 0), 1),
-                            "steps": steps,
-                        }
-    except Exception:
-        pass
+                            steps: list[str] = []
+                            legs = route.get("legs", [])
+                            for leg in legs:
+                                for step in leg.get("steps", []):
+                                    maneuver = step.get("maneuver", {})
+                                    m_type = maneuver.get("type", "proceed").capitalize()
+                                    modifier = maneuver.get("modifier", "")
+                                    name = step.get("name", "")
+                                    desc = f"{m_type} {modifier}".strip()
+                                    if name:
+                                        desc += f" onto {name}"
+                                    dist_m = step.get("distance", 0)
+                                    if dist_m > 0:
+                                        desc += f" ({int(dist_m)}m)"
+                                    steps.append(desc)
+
+                            return {
+                                "success": True,
+                                "provider": "OSRM_OPENSTREETMAP",
+                                "corridor": full_corridor,
+                                "distance_m": round(route.get("distance", 0), 1),
+                                "duration_s": round(route.get("duration", 0), 1),
+                                "steps": steps,
+                            }
+        except Exception:
+            continue
 
     # High-fidelity fallback if OSRM public API is unreachable or rate-limited
     interpolated = [
         [round(start_lat, 6), round(start_lon, 6)],
-        [round(start_lat + (dest_lat - start_lat) * 0.35, 6), round(start_lon + (dest_lon - start_lon) * 0.25, 6)],
-        [round(start_lat + (dest_lat - start_lat) * 0.70, 6), round(start_lon + (dest_lon - start_lon) * 0.75, 6)],
+        [round(start_lat + (dest_lat - start_lat) * 0.33, 6), round(start_lon + (dest_lon - start_lon) * 0.25, 6)],
+        [round(start_lat + (dest_lat - start_lat) * 0.66, 6), round(start_lon + (dest_lon - start_lon) * 0.75, 6)],
         [round(dest_lat, 6), round(dest_lon, 6)],
     ]
     approx_dist = haversine(start_lat, start_lon, dest_lat, dest_lon)
@@ -260,8 +267,8 @@ async def fetch_osrm_route(
         "distance_m": round(approx_dist, 1),
         "duration_s": round(approx_dist / 1.3, 1),
         "steps": [
-            f"Start at current location ({start_lat:.4f}, {start_lon:.4f})",
-            "Follow monitored safe corridor path",
+            f"Depart from origin ({start_lat:.4f}, {start_lon:.4f})",
+            "Follow active safe corridor monitoring zone",
             f"Arrive safely at destination ({dest_lat:.4f}, {dest_lon:.4f})",
         ],
     }

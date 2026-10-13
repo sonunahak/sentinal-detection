@@ -8,9 +8,11 @@ let seq = 0;
 let hasAutoCentered = false;
 
 // Destination & Corridor State
+let plannedStart = null; // { lat, lng }
 let plannedDestination = null; // { lat, lng, name }
 let plannedCorridorPoints = null; // [[lat, lng], ...]
 let isPickingDestination = false;
+let lastKnownGps = null; // { lat, lng }
 
 // Motion Sensor & Panic State
 let lastAcceleration = { x: 0, y: 0, z: 0 };
@@ -26,11 +28,26 @@ L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
   attribution: '© OpenStreetMap contributors',
 }).addTo(map);
 
+// Auto-detect and center map on user's current city/area if location permission is available
+if (navigator.geolocation) {
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      lastKnownGps = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      if (!sessionId) {
+        map.setView([pos.coords.latitude, pos.coords.longitude], 14);
+      }
+    },
+    () => {},
+    { enableHighAccuracy: true, timeout: 6000 }
+  );
+}
+
 // Map Layers
 const route = L.polyline([], { color: '#e6ae3f', weight: 5 }).addTo(map);
 let corridorBufferLayer = L.polyline([], { color: '#3b82f6', weight: 26, opacity: 0.16 }).addTo(map);
 let corridorCenterLayer = L.polyline([], { color: '#2563eb', weight: 3, dashArray: '6, 8', opacity: 0.85 }).addTo(map);
 let markers = [];
+let startMarker = null;
 let destMarker = null;
 
 function centerRoute(coordinates) {
@@ -194,63 +211,90 @@ function promptValue(message, defaultValue = '') {
 // -------------------------------------------------------------
 // Destination Picking & Corridor Generation
 // -------------------------------------------------------------
-$('pick-dest-map').onclick = () => {
+function drawStartMarker(lat, lng) {
+  if (startMarker) map.removeLayer(startMarker);
+  startMarker = L.circleMarker([lat, lng], { radius: 9, color: '#047857', fillColor: '#10b981', fillOpacity: 0.95 })
+    .addTo(map)
+    .bindTooltip('🟢 Start Location', { permanent: true, direction: 'top' })
+    .openTooltip();
+}
+
+function drawDestMarker(lat, lng, name) {
+  if (destMarker) map.removeLayer(destMarker);
+  destMarker = L.circleMarker([lat, lng], { radius: 10, color: '#6d28d9', fillColor: '#8b5cf6', fillOpacity: 0.95 })
+    .addTo(map)
+    .bindTooltip(`🏁 ${name}`, { permanent: true, direction: 'top' })
+    .openTooltip();
+}
+
+$('pick-dest-map').onclick = async () => {
   closeModal();
-  isPickingDestination = true;
-  toast('Tap any location on the map to set your destination');
   map.getContainer().style.cursor = 'crosshair';
 
-  map.once('click', async (e) => {
-    isPickingDestination = false;
-    map.getContainer().style.cursor = '';
-    const destLat = e.latlng.lat;
-    const destLng = e.latlng.lng;
-
-    // Determine starting anchor point
-    let startLat = 20.2961, startLng = 85.8245;
-    if (navigator.geolocation && window.isSecureContext) {
-      try {
-        const pos = await getCurrentPosition();
-        startLat = pos.coords.latitude;
-        startLng = pos.coords.longitude;
-      } catch (err) {}
-    }
-
-    // Fetch real turn-by-turn street routing from OSRM
-    toast('Calculating street network route via OSRM...');
+  // 1. Check if GPS location is already known or available
+  if (!lastKnownGps && navigator.geolocation && window.isSecureContext) {
     try {
-      const mode = $('travel-mode') ? $('travel-mode').value : 'WALKING';
-      const routeData = await api(`/api/routing/route?start_lat=${startLat}&start_lon=${startLng}&dest_lat=${destLat}&dest_lon=${destLng}&mode=${mode}`);
-      plannedCorridorPoints = routeData.corridor;
-      renderRouteSteps(routeData.steps, routeData.distance_m, routeData.duration_s, routeData.provider);
-      toast(`Real street route loaded (${Math.round(routeData.distance_m)}m via ${routeData.provider})`);
-    } catch (err) {
-      plannedCorridorPoints = [
-        [startLat, startLng],
-        [startLat + (destLat - startLat) * 0.35, startLng + (destLng - startLng) * 0.25],
-        [startLat + (destLat - startLat) * 0.70, startLng + (destLng - startLng) * 0.75],
-        [destLat, destLng],
-      ];
-    }
+      const pos = await getCurrentPosition();
+      lastKnownGps = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+    } catch (e) {}
+  }
 
-    plannedDestination = { lat: destLat, lng: destLng, name: $('destination-name').value || 'Selected Destination' };
+  if (lastKnownGps) {
+    // Start is automatically locked to user's real GPS!
+    plannedStart = { lat: lastKnownGps.lat, lng: lastKnownGps.lng };
+    drawStartMarker(plannedStart.lat, plannedStart.lng);
+    toast('🟢 Start locked to your GPS! Click on the map to set your DESTINATION.');
 
-    // Update map preview
-    drawCorridor(plannedCorridorPoints);
-    if (destMarker) map.removeLayer(destMarker);
-    destMarker = L.circleMarker([destLat, destLng], { radius: 9, color: '#8b5cf6', fillOpacity: 0.9 })
-      .addTo(map)
-      .bindTooltip(`🏁 ${plannedDestination.name}`, { permanent: true })
-      .openTooltip();
+    map.once('click', async (eDest) => {
+      await finalizeDestination(eDest.latlng.lat, eDest.latlng.lng);
+    });
+  } else {
+    // No GPS: interactive 2-click setup (Click 1: Start, Click 2: Destination)
+    toast('📍 Click 1 of 2: Click the map where you want to START.');
 
-    map.fitBounds(L.polyline(plannedCorridorPoints).getBounds(), { padding: [40, 40] });
+    map.once('click', (eStart) => {
+      plannedStart = { lat: eStart.latlng.lat, lng: eStart.latlng.lng };
+      drawStartMarker(plannedStart.lat, plannedStart.lng);
+      toast('🏁 Click 2 of 2: Now click where you want to GO (Destination).');
 
-    if (!$('destination-name').value) {
-      $('destination-name').value = `Dest (${destLat.toFixed(4)}, ${destLng.toFixed(4)})`;
-    }
-    openModal();
-  });
+      map.once('click', async (eDest) => {
+        await finalizeDestination(eDest.latlng.lat, eDest.latlng.lng);
+      });
+    });
+  }
 };
+
+async function finalizeDestination(destLat, destLng) {
+  map.getContainer().style.cursor = '';
+  const destName = $('destination-name').value.trim() || 'Selected Destination';
+  plannedDestination = { lat: destLat, lng: destLng, name: destName };
+  drawDestMarker(destLat, destLng, destName);
+
+  toast('Computing street network route via OSRM...');
+
+  try {
+    const mode = $('travel-mode') ? $('travel-mode').value : 'WALKING';
+    const routeData = await api(`/api/routing/route?start_lat=${plannedStart.lat}&start_lon=${plannedStart.lng}&dest_lat=${destLat}&dest_lon=${destLng}&mode=${mode}`);
+    plannedCorridorPoints = routeData.corridor;
+    renderRouteSteps(routeData.steps, routeData.distance_m, routeData.duration_s, routeData.provider);
+    toast(`Street corridor connected (${Math.round(routeData.distance_m)}m via ${routeData.provider})`);
+  } catch (err) {
+    plannedCorridorPoints = [
+      [plannedStart.lat, plannedStart.lng],
+      [plannedStart.lat + (destLat - plannedStart.lat) * 0.33, plannedStart.lng + (destLng - plannedStart.lng) * 0.25],
+      [plannedStart.lat + (destLat - plannedStart.lat) * 0.66, plannedStart.lng + (destLng - plannedStart.lng) * 0.75],
+      [destLat, destLng],
+    ];
+  }
+
+  drawCorridor(plannedCorridorPoints);
+  map.fitBounds(L.polyline(plannedCorridorPoints).getBounds(), { padding: [45, 45] });
+
+  if (!$('destination-name').value) {
+    $('destination-name').value = `Dest (${destLat.toFixed(4)}, ${destLng.toFixed(4)})`;
+  }
+  openModal();
+}
 
 function escapeHtml(str) {
   return String(str).replace(/[&<>'"]/g, (char) => ({
@@ -474,20 +518,22 @@ $('simulate-shake').onclick = () => {
 
 $('simulate-detour').onclick = async () => {
   if (!sessionId) return toast('Start an escort session first');
-  // Send point 350 meters off corridor
-  const offLat = (plannedDestination ? plannedDestination.lat : 20.2961) + 0.0035;
-  const offLng = (plannedDestination ? plannedDestination.lng : 85.8245) + 0.0035;
-  toast('Sending detour point (350m off corridor)...');
+  const anchor = (plannedCorridorPoints && plannedCorridorPoints.length > 2)
+    ? plannedCorridorPoints[Math.floor(plannedCorridorPoints.length / 2)]
+    : (plannedDestination ? [plannedDestination.lat, plannedDestination.lng] : [20.2961, 85.8245]);
+  const offLat = anchor[0] + 0.0035;
+  const offLng = anchor[1] + 0.0035;
+  toast('Sending detour point (350m off route corridor)...');
   await sendPoint(offLat, offLng, { speed: 1.3, accuracy: 6 });
 };
 
 $('simulate-speed').onclick = async () => {
   if (!sessionId) return toast('Start an escort session first');
-  // Send vehicular speed (12.5 m/s = 45 km/h) in walking mode
-  const lat = (plannedDestination ? plannedDestination.lat : 20.2961) + 0.001;
-  const lng = (plannedDestination ? plannedDestination.lng : 85.8245) + 0.001;
+  const anchor = (plannedCorridorPoints && plannedCorridorPoints.length > 1)
+    ? plannedCorridorPoints[1]
+    : (plannedStart ? [plannedStart.lat, plannedStart.lng] : [20.2961, 85.8245]);
   toast('Simulating vehicular speed: 45 km/h in Walking mode...');
-  await sendPoint(lat, lng, { speed: 12.5, accuracy: 5 });
+  await sendPoint(anchor[0], anchor[1], { speed: 12.5, accuracy: 5 });
 };
 
 // -------------------------------------------------------------
@@ -570,19 +616,28 @@ $('heartbeat').onclick = sendHeartbeat;
 $('simulate').onclick = async () => {
   if (!sessionId) return toast('Start an escort before simulating route');
   try {
-    const corridor = plannedCorridorPoints || [
-      [20.2961, 85.8245],
-      [20.2980, 85.8270],
-      [20.3000, 85.8295],
-      [20.3020, 85.8320],
-    ];
+    const corridor = (plannedCorridorPoints && plannedCorridorPoints.length >= 2)
+      ? plannedCorridorPoints
+      : [
+          [20.2961, 85.8245],
+          [20.2980, 85.8270],
+          [20.3000, 85.8295],
+          [20.3020, 85.8320],
+        ];
 
-    for (let step = 0; step < corridor.length; step += 1) {
-      const [latitude, longitude] = corridor[step];
-      await sendPoint(latitude, longitude, { accuracy: 6, speed: 1.4 });
+    toast('Simulating movement along planned street route...');
+    const total = corridor.length;
+    const sampleCount = Math.min(8, total);
+    const stepInterval = Math.max(1, Math.floor(total / sampleCount));
+
+    for (let i = 0; i < total; i += stepInterval) {
+      const [latitude, longitude] = corridor[i];
+      await sendPoint(latitude, longitude, { accuracy: 5, speed: 1.4 });
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
-    toast('On-path simulation complete');
+    const lastPt = corridor[total - 1];
+    await sendPoint(lastPt[0], lastPt[1], { accuracy: 4, speed: 0.8 });
+    toast('On-path route simulation complete');
   } catch (error) {
     toast(error.message);
   }
